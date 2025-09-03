@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Flappy Staines</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <style>
+    body { margin:0; background:#70c5ce; overflow:hidden; }
+    canvas { display:block; margin:0 auto; background:#70c5ce; }
+    #score { 
+      position:absolute; top:15px; left:15px; 
+      font:bold 24px Arial; background:rgba(255,255,255,.7);
+      padding:6px 10px; border-radius:10px; display:none;
+    }
+    #startBtn {
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      background:#111; color:#fff;
+      font-size:20px; font-weight:bold;
+      padding:12px 24px;
+      border:none; border-radius:12px;
+      cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <div id="score">0</div>
+  <canvas id="gameCanvas" width="420" height="680"></canvas>
+  <button id="startBtn">Start Game</button>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const scoreEl = document.getElementById("score");
+    const startBtn = document.getElementById("startBtn");
+
+    // Load images
+    const bg = new Image(); bg.src = "bg.png";
+    const ground = new Image(); ground.src = "ground.png";
+    const pipeNorth = new Image(); pipeNorth.src = "tube1.png";
+    const pipeSouth = new Image(); pipeSouth.src = "tube2.png";
+    const birdImg = new Image(); birdImg.src = "bird.png";
+
+    // Load sounds
+    const flapSound   = new Audio("vote-for-staines.mp3");
+    const hitSound    = new Audio("sfx_hit.mp3");
+    const dieSound    = new Audio("sfx_die.mp3");
+    const pointSound  = new Audio("sfx_point.mp3");
+    const swooshSound = new Audio("sfx_swooshing.mp3");
+
+    let frames = 0;
+    let score = 0;
+    let best = 0;
+    let running = false;
+
+    const bird = {
+      x: 50,
+      y: 150,
+      w: 40,
+      h: 40,
+      gravity: 0.25,
+      jump: 4.6,
+      speed: 0,
+      rotation: 0,
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        ctx.drawImage(birdImg, -this.w/2, -this.h/2, this.w, this.h);
+        ctx.restore();
+      },
+      flap() {
+        this.speed = -this.jump;
+        flapSound.currentTime = 0;
+        flapSound.play();
+      },
+      update() {
+        this.speed += this.gravity;
+        this.y += this.speed;
+
+        if (this.y + this.h/2 >= canvas.height - ground.height) {
+          this.y = canvas.height - ground.height - this.h/2;
+          dieSound.play();
+          gameOver();
+        }
+      }
+    };
+
+    const pipes = [];
+    const gap = 120;
+    const pipeWidth = 60;
+
+    function spawnPipe() {
+      const topY = -Math.random() * 200 - 100;
+      pipes.push({ x: canvas.width, y: topY, passed: false });
+    }
+
+    function drawPipes() {
+      for (let p of pipes) {
+        ctx.drawImage(pipeNorth, p.x, p.y);
+        ctx.drawImage(pipeSouth, p.x, p.y + pipeNorth.height + gap);
+      }
+    }
+
+    function updatePipes() {
+      for (let p of pipes) {
+        p.x -= 2;
+
+        // collision
+        if (bird.x + bird.w/2 > p.x && bird.x - bird.w/2 < p.x + pipeWidth) {
+          if (bird.y - bird.h/2 < p.y + pipeNorth.height ||
+              bird.y + bird.h/2 > p.y + pipeNorth.height + gap) {
+            hitSound.play();
+            gameOver();
+          }
+        }
+
+        // score
+        if (!p.passed && p.x + pipeWidth < bird.x) {
+          p.passed = true;
+          score++;
+          scoreEl.textContent = score;
+          pointSound.play();
+        }
+      }
+
+      // remove off-screen pipes
+      if (pipes.length && pipes[0].x < -pipeWidth) pipes.shift();
+
+      // add new pipe
+      if (frames % 100 === 0) spawnPipe();
+    }
+
+    function drawGround() {
+      ctx.drawImage(ground, 0, canvas.height - ground.height);
+    }
+
+    function gameOver() {
+      running = false;
+      best = Math.max(best, score);
+      alert(`Game Over! Score: ${score} (Best: ${best})`);
+      try {
+        if (window.TelegramGameProxy && TelegramGameProxy.shareScore) {
+          TelegramGameProxy.shareScore(score);
+        }
+      } catch(e) {}
+      swooshSound.play();
+      startBtn.style.display = "block";
+      scoreEl.style.display = "none";
+    }
+
+    function reset() {
+      score = 0;
+      scoreEl.textContent = score;
+      bird.y = 150;
+      bird.speed = 0;
+      pipes.length = 0;
+      frames = 0;
+    }
+
+    function loop() {
+      if (!running) return;
+      frames++;
+      ctx.drawImage(bg, 0, 0);
+      updatePipes();
+      drawPipes();
+      bird.update();
+      bird.draw();
+      drawGround();
+      requestAnimationFrame(loop);
+    }
+
+    function startGame() {
+      reset();
+      running = true;
+      scoreEl.style.display = "block";
+      startBtn.style.display = "none";
+      loop();
+    }
+
+    window.addEventListener("keydown", e => {
+      if ((e.code === "Space" || e.code === "ArrowUp") && running) bird.flap();
+    });
+    window.addEventListener("pointerdown", () => {
+      if (running) bird.flap();
+    });
+
+    startBtn.addEventListener("click", startGame);
+  </script>
+</body>
+</html>
