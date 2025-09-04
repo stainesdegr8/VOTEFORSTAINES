@@ -28,95 +28,46 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays instantly on every FLAP. =====
+    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // ---- EXACT FILENAMES (change if yours differ) ----
+    // ---- EXACT FILENAMES (matches your repo screenshot) ----
     const FILE_BG      = "bg.png";
     const FILE_GROUND  = "ground.png";
-    const FILE_PIPE_N  = "tube1.png";      // top pipe image
-    const FILE_PIPE_S  = "tube2.png";      // bottom pipe image
-    const FILE_BIRD    = "smallbird.png";  // your face sprite (PNG)
+    const FILE_PIPE_N  = "tube1.png";      // top pipe
+    const FILE_PIPE_S  = "tube2.png";      // bottom pipe
+    const FILE_BIRD    = "bird.png";       // your face sprite
+    const STAINES_SRC  = ["vote-for-staines.mp3","vote for staines.mp3"]; // flap sound
+    const HIT_SRC      = ["sfx_hit.mp3"];
+    const DIE_SRC      = ["sfx_die.mp3"];
+    const POINT_SRC    = ["sfx_point.mp3"]; // optional score chime
 
-    // ---- AUDIO sources ----
-    const STAINES_SRC = ["vote for staines.mp3","vote-for-staines.mp3","voteforstaines.mp3","staines.mp3"];
-    const HIT_SRC     = ["sfx_hit.mp3"];
-    const DIE_SRC     = ["sfx_die.mp3"];
-
-    // ---- Canvas proportions (stable layout) ----
-    const CANVAS_W = 420, CANVAS_H = 680;           // logical size
-    const GROUND_H = Math.round(CANVAS_H * 0.18);   // ground thickness
-    const PIPE_W   = Math.round(CANVAS_W * 0.16);   // pipe width
-    const PIPE_H   = Math.round(CANVAS_H * 0.62);   // each pipe segment height
-    const GAP      = Math.round(CANVAS_H * 0.22);   // gap between pipes
-    const BIRD_SZ  = Math.round(CANVAS_W * 0.11);   // bird square size
+    // ---- layout (stable) ----
+    const CANVAS_W = 420, CANVAS_H = 680;
+    const GROUND_H = Math.round(CANVAS_H * 0.18);
+    const PIPE_W   = Math.round(CANVAS_W * 0.16);
+    const PIPE_H   = Math.round(CANVAS_H * 0.62);
+    const GAP      = Math.round(CANVAS_H * 0.22);
+    const BIRD_SZ  = Math.round(CANVAS_W * 0.11);
 
     // ---- helpers ----
     const loadImg = (src) => new Promise((res)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=src; });
 
-    // Low-latency WebAudio for "Staines" + HTMLAudio pool fallback
-    let audioCtx = null, stainesBuffer = null;
-    const htmlPool = [];
-    function encodeURL(s){ return s.replace(/ /g, "%20"); }
-
-    async function loadFirstBuffer(srcList){
-      for (const raw of srcList) {
-        try {
-          const src = encodeURL(raw);
-          const r = await fetch(src);
-          if (!r.ok) continue;
-          const arr = await r.arrayBuffer();
-          return await audioCtx.decodeAudioData(arr);
-        } catch(e){}
-      }
-      return null;
-    }
-    function playBuffer(buf, vol=1){
-      if (!audioCtx || !buf) return false;
-      try{
-        const src = audioCtx.createBufferSource();
-        const gain= audioCtx.createGain();
-        gain.gain.value = vol;
-        src.buffer = buf;
-        src.connect(gain).connect(audioCtx.destination);
-        src.start(0);
-        return true;
-      }catch(e){ return false; }
-    }
-    function makeHtmlPool(srcList, n=4){
+    // simple sound wrapper (creates a fresh <audio> each play for low latency/overlap)
+    function makeSound(srcList){
       const src = srcList[0];
-      for (let i=0;i<n;i++){
-        const a = new Audio(src);
-        a.preload = "auto";
-        a.load();
-        htmlPool.push(a);
-      }
-    }
-    let poolIdx = 0;
-    function playFromPool(){
-      if (!htmlPool.length) return;
-      const a = htmlPool[poolIdx % htmlPool.length];
-      poolIdx++;
-      try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_){}
-    }
-
-    function playStainesInstant(){
-      // Try WebAudio first, fallback to HTMLAudio pool
-      if (!playBuffer(stainesBuffer, 1)) playFromPool();
-    }
-
-    function createOneShotPlayer(srcList){
-      const src = encodeURL(srcList[0]);
-      return () => {
-        try { const a = new Audio(src); a.currentTime=0; a.play().catch(()=>{}); } catch(_){}
-      };
+      const play = () => { try{ const a=new Audio(src); a.currentTime=0; a.play().catch(()=>{});}catch(_){} };
+      const prime = () => { try{ const a=new Audio(src); a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){} };
+      return { play, prime };
     }
     const SFX = {
-      hit: createOneShotPlayer(HIT_SRC),
-      die: createOneShotPlayer(DIE_SRC)
+      staines: makeSound(STAINES_SRC),  // play on FLAP
+      hit:     makeSound(HIT_SRC),
+      die:     makeSound(DIE_SRC),
+      point:   makeSound(POINT_SRC)
     };
 
     // ---- state ----
@@ -136,11 +87,11 @@
         else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; playStainesInstant(); },
+      flap(){ this.speed = -this.jump; SFX.staines.play(); }, // <-- VOTE FOR STAINES on tap
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
-        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die(); gameOver(); }
+        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
       }
     };
 
@@ -161,7 +112,7 @@
       for (const p of pipes) {
         p.x -= 2;
 
-        // AABB vs rectangles
+        // AABB collision
         const bx1 = bird.x - bird.w/2, bx2 = bird.x + bird.w/2;
         const by1 = bird.y - bird.h/2, by2 = bird.y + bird.h/2;
         const px1 = p.x, px2 = p.x + PIPE_W;
@@ -174,13 +125,14 @@
         const hitTop   = overlapX && (by1 < topBottomY);
         const hitBot   = overlapX && (by2 > gapEnd);
 
-        if (hitTop || hitBot) { SFX.hit(); gameOver(); }
+        if (hitTop || hitBot) { SFX.hit.play(); gameOver(); }
 
+        // score when fully passed
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
           score++;
           scoreEl.textContent = score;
-          // (No audio here anymore; "Staines" plays on FLAP instead)
+          SFX.point.play(); // normal point ding (Staines now ONLY on flap)
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
@@ -212,18 +164,9 @@
       drawGround();
       requestAnimationFrame(loop);
     }
-
-    async function startGame(){
-      // Create AudioContext on user gesture for instant playback
-      if (!audioCtx) {
-        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
-      }
-
-      // Preload WebAudio buffer for "Staines" + build HTMLAudio pool as fallback
-      if (audioCtx && !stainesBuffer) {
-        stainesBuffer = await loadFirstBuffer(STAINES_SRC);
-      }
-      if (!htmlPool.length) { makeHtmlPool(STAINES_SRC, 4); }
+    function startGame(){
+      // prime audios so mobile plays immediately later
+      SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
 
       reset(); running = true;
       scoreEl.style.display = "block";
@@ -264,3 +207,4 @@
   </script>
 </body>
 </html>
+
