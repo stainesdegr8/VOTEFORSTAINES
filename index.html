@@ -34,18 +34,43 @@
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // ---- EXACT FILENAMES (matches your repo screenshot) ----
+    // ---- Filenames (match your repo) ----
     const FILE_BG      = "bg.png";
     const FILE_GROUND  = "ground.png";
-    const FILE_PIPE_N  = "tube1.png";      // top pipe
-    const FILE_PIPE_S  = "tube2.png";      // bottom pipe
-    const FILE_BIRD    = "bird.png";       // your face sprite
-    const STAINES_SRC  = ["vote-for-staines.mp3","vote for staines.mp3"]; // flap sound
-    const HIT_SRC      = ["sfx_hit.mp3"];
-    const DIE_SRC      = ["sfx_die.mp3"];
-    const POINT_SRC    = ["sfx_point.mp3"]; // optional score chime
+    const FILE_PIPE_N  = "tube1.png";
+    const FILE_PIPE_S  = "tube2.png";
+    const FILE_BIRD    = "bird.png";
 
-    // ---- layout (stable) ----
+    // ---- Audio (your repo has vote-for-staines.mp3) ----
+    const STAINES_FILE = "vote-for-staines.mp3";
+    const HIT_FILE     = "sfx_hit.mp3";
+    const DIE_FILE     = "sfx_die.mp3";
+    const POINT_FILE   = "sfx_point.mp3";
+
+    // Low-latency: keep one base <audio> per sound and clone on play
+    function makePool(src, count=4){
+      const base = new Audio(src); base.preload="auto"; base.load();
+      const pool = Array.from({length:count}, ()=> base.cloneNode(true));
+      let i = 0;
+      return {
+        prime(){ // unlock on user gesture
+          base.play().then(()=>{ base.pause(); base.currentTime=0; }).catch(()=>{});
+          pool.forEach(a=>{ try{ a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){} });
+        },
+        play(){
+          const a = pool[i++ % pool.length];
+          try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_) {}
+        }
+      };
+    }
+    const SFX = {
+      staines: makePool(STAINES_FILE, 6), // <-- plays on FLAP
+      hit:     makePool(HIT_FILE, 2),
+      die:     makePool(DIE_FILE, 2),
+      point:   makePool(POINT_FILE, 2)
+    };
+
+    // ---- Layout (stable) ----
     const CANVAS_W = 420, CANVAS_H = 680;
     const GROUND_H = Math.round(CANVAS_H * 0.18);
     const PIPE_W   = Math.round(CANVAS_W * 0.16);
@@ -53,24 +78,12 @@
     const GAP      = Math.round(CANVAS_H * 0.22);
     const BIRD_SZ  = Math.round(CANVAS_W * 0.11);
 
-    // ---- helpers ----
-    const loadImg = (src) => new Promise((res)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=src; });
+    // ---- Helpers ----
+    const loadImg = (src) => new Promise(res => {
+      const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src;
+    });
 
-    // simple sound wrapper (creates a fresh <audio> each play for low latency/overlap)
-    function makeSound(srcList){
-      const src = srcList[0];
-      const play = () => { try{ const a=new Audio(src); a.currentTime=0; a.play().catch(()=>{});}catch(_){} };
-      const prime = () => { try{ const a=new Audio(src); a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){} };
-      return { play, prime };
-    }
-    const SFX = {
-      staines: makeSound(STAINES_SRC),  // play on FLAP
-      hit:     makeSound(HIT_SRC),
-      die:     makeSound(DIE_SRC),
-      point:   makeSound(POINT_SRC)
-    };
-
-    // ---- state ----
+    // ---- State ----
     let IM = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
     let frames=0, score=0, running=false;
 
@@ -83,11 +96,16 @@
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.rotation);
-        if (IM.bird) ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
-        else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); }
+        if (IM.bird) {
+          ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
+        } else {
+          // loud fallback so you SEE the bird even if image missing
+          ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle="#000"; ctx.lineWidth=3; ctx.stroke();
+        }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; SFX.staines.play(); }, // <-- VOTE FOR STAINES on tap
+      flap(){ this.speed = -this.jump; SFX.staines.play(); }, // <-- play on EVERY tap
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
@@ -127,12 +145,10 @@
 
         if (hitTop || hitBot) { SFX.hit.play(); gameOver(); }
 
-        // score when fully passed
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
-          score++;
-          scoreEl.textContent = score;
-          SFX.point.play(); // normal point ding (Staines now ONLY on flap)
+          score++; scoreEl.textContent = score;
+          SFX.point.play();
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
@@ -146,6 +162,7 @@
       running = false;
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
+      renderOnce(); // show final frame
     }
     function reset(){
       score = 0; scoreEl.textContent = score;
@@ -156,16 +173,22 @@
     function loop(){
       if (!running) return;
       frames++;
+      renderOnce();
+      requestAnimationFrame(loop);
+    }
+
+    function renderOnce(){
       ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
       drawBG();
       updatePipes();
       drawPipes();
-      bird.update(); bird.draw();
+      if (running) bird.update();
+      bird.draw();
       drawGround();
-      requestAnimationFrame(loop);
     }
+
     function startGame(){
-      // prime audios so mobile plays immediately later
+      // Prime audio so mobile plays instantly
       SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
 
       reset(); running = true;
@@ -174,8 +197,8 @@
       loop();
     }
 
-    // input
-    window.addEventListener("keydown", (e)=>{ if ((e.code==="Space"||e.code==="ArrowUp") && running) bird.flap(); });
+    // inputs
+    window.addEventListener("keydown", (e)=>{ if ((e.code==="Space"||e.code==="ArrowUp")) { if (running) bird.flap(); }});
     window.addEventListener("pointerdown", ()=>{ if (running) bird.flap(); });
     startBtn.addEventListener("click", startGame);
 
@@ -188,6 +211,9 @@
 
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
       startBtn.style.display = "block";
+
+      // draw a preview frame so you SEE the bird before pressing Start
+      renderOnce();
     })();
   </script>
 
