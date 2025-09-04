@@ -7,32 +7,45 @@
   <style>
     html, body { margin:0; padding:0; height:100%; }
     body { background:#70c5ce; overflow:hidden; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-    #score {
+    #score{
       position:absolute; top:14px; left:14px;
       background:rgba(255,255,255,.85); color:#111; font-weight:700; font-size:22px;
       padding:6px 10px; border-radius:10px; display:none; box-shadow:0 2px 6px rgba(0,0,0,.15);
       user-select:none;
     }
+    #finalScore{
+      position:absolute; left:50%; top:32%;
+      transform:translateX(-50%);
+      background:rgba(0,0,0,.75); color:#fff;
+      padding:14px 18px; border-radius:14px;
+      font-size:20px; font-weight:800; letter-spacing:.3px;
+      display:none; text-align:center; white-space:nowrap;
+      box-shadow:0 10px 28px rgba(0,0,0,.25);
+      user-select:none;
+    }
     #gameCanvas { display:block; margin:0 auto; background:#70c5ce; }
-    #startBtn {
-      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    #startBtn{
+      position:absolute; top:55%; left:50%; transform:translate(-50%,-50%);
       background:#111; color:#fff; border:none; cursor:pointer; font-weight:700; font-size:18px;
       padding:12px 22px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25); display:none;
     }
-    @media (max-width:480px){ #gameCanvas { width:100vw; height:auto; } }
+    @media (max-width:480px){ #gameCanvas{width:100vw;height:auto;} }
   </style>
 </head>
 <body>
   <div id="score">0</div>
+  <div id="finalScore">Game Over • Score: <span id="finalNum">0</span></div>
   <canvas id="gameCanvas" width="420" height="680"></canvas>
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. =====
+    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. Shows final score on death. =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
+    const finalBox = document.getElementById("finalScore");
+    const finalNum = document.getElementById("finalNum");
 
     // ---- Filenames (match your repo) ----
     const FILE_BG      = "bg.png";
@@ -47,30 +60,28 @@
     const DIE_FILE     = "sfx_die.mp3";
     const POINT_FILE   = "sfx_point.mp3";
 
-    // Low-latency: keep one base <audio> per sound and clone on play
+    // Small preloaded audio pools (low-latency & overlap-safe)
     function makePool(src, count=4){
       const base = new Audio(src); base.preload="auto"; base.load();
       const pool = Array.from({length:count}, ()=> base.cloneNode(true));
       let i = 0;
       return {
-        prime(){ // unlock on user gesture
-          base.play().then(()=>{ base.pause(); base.currentTime=0; }).catch(()=>{});
-          pool.forEach(a=>{ try{ a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){} });
+        prime(){  // unlock on first gesture
+          [base, ...pool].forEach(a=>{
+            try{ a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){}
+          });
         },
-        play(){
-          const a = pool[i++ % pool.length];
-          try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_) {}
-        }
+        play(){ const a = pool[i++ % pool.length]; try{ a.currentTime=0; a.play().catch(()=>{});}catch(_){}; }
       };
     }
     const SFX = {
-      staines: makePool(STAINES_FILE, 6), // <-- plays on FLAP
+      staines: makePool(STAINES_FILE, 6), // <-- plays on tap
       hit:     makePool(HIT_FILE, 2),
       die:     makePool(DIE_FILE, 2),
       point:   makePool(POINT_FILE, 2)
     };
 
-    // ---- Layout (stable) ----
+    // ---- Layout ----
     const CANVAS_W = 420, CANVAS_H = 680;
     const GROUND_H = Math.round(CANVAS_H * 0.18);
     const PIPE_W   = Math.round(CANVAS_W * 0.16);
@@ -96,16 +107,11 @@
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.rotation);
-        if (IM.bird) {
-          ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
-        } else {
-          // loud fallback so you SEE the bird even if image missing
-          ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill();
-          ctx.strokeStyle="#000"; ctx.lineWidth=3; ctx.stroke();
-        }
+        if (IM.bird) { ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h); }
+        else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#000"; ctx.lineWidth=3; ctx.stroke(); }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; SFX.staines.play(); }, // <-- play on EVERY tap
+      flap(){ this.speed = -this.jump; SFX.staines.play(); },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
@@ -130,7 +136,6 @@
       for (const p of pipes) {
         p.x -= 2;
 
-        // AABB collision
         const bx1 = bird.x - bird.w/2, bx2 = bird.x + bird.w/2;
         const by1 = bird.y - bird.h/2, by2 = bird.y + bird.h/2;
         const px1 = p.x, px2 = p.x + PIPE_W;
@@ -145,6 +150,7 @@
 
         if (hitTop || hitBot) { SFX.hit.play(); gameOver(); }
 
+        // score when fully passed
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
           score++; scoreEl.textContent = score;
@@ -161,34 +167,39 @@
     function gameOver(){
       running = false;
       startBtn.style.display = "block";
-      scoreEl.style.display  = "none";
-      renderOnce(); // show final frame
+      scoreEl.style.display  = "block"; // keep score visible
+      finalNum.textContent   = score;   // show final score overlay
+      finalBox.style.display = "block";
+      renderOnce(); // freeze final frame
     }
+
     function reset(){
       score = 0; scoreEl.textContent = score;
       pipes.length = 0; frames = 0;
       bird.y = Math.floor(CANVAS_H * 0.35);
       bird.speed = 0;
+      finalBox.style.display = "none";  // hide overlay when restarting
     }
+
     function loop(){
       if (!running) return;
       frames++;
-      renderOnce();
+      renderOnce(true);
       requestAnimationFrame(loop);
     }
 
-    function renderOnce(){
+    function renderOnce(run=false){
       ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
       drawBG();
-      updatePipes();
+      if (run) updatePipes();
       drawPipes();
-      if (running) bird.update();
+      if (run) bird.update();
       bird.draw();
       drawGround();
     }
 
     function startGame(){
-      // Prime audio so mobile plays instantly
+      // prime audio pools so mobile plays instantly
       SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
 
       reset(); running = true;
@@ -208,12 +219,9 @@
         loadImg(FILE_BG), loadImg(FILE_GROUND), loadImg(FILE_PIPE_N), loadImg(FILE_PIPE_S), loadImg(FILE_BIRD)
       ]);
       IM = { bg, ground, pipeN, pipeS, bird: birdImg };
-
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
       startBtn.style.display = "block";
-
-      // draw a preview frame so you SEE the bird before pressing Start
-      renderOnce();
+      renderOnce(false); // preview frame (shows bird before start)
     })();
   </script>
 
@@ -233,4 +241,3 @@
   </script>
 </body>
 </html>
-
