@@ -28,7 +28,7 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy with "Vote For Staines" on every score =====
+    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays instantly on every FLAP. =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
@@ -41,48 +41,82 @@
     const FILE_PIPE_S  = "tube2.png";      // bottom pipe image
     const FILE_BIRD    = "smallbird.png";  // your face sprite (PNG)
 
-    // ---- AUDIO (first existing filename will be used) ----
+    // ---- AUDIO sources ----
     const STAINES_SRC = ["vote for staines.mp3","vote-for-staines.mp3","voteforstaines.mp3","staines.mp3"];
     const HIT_SRC     = ["sfx_hit.mp3"];
     const DIE_SRC     = ["sfx_die.mp3"];
-    const FLAP_SRC    = ["sfx_swooshing.mp3"]; // soft flap (optional)
 
     // ---- Canvas proportions (stable layout) ----
-    const CANVAS_W = 420, CANVAS_H = 680;           // logical canvas size
+    const CANVAS_W = 420, CANVAS_H = 680;           // logical size
     const GROUND_H = Math.round(CANVAS_H * 0.18);   // ground thickness
     const PIPE_W   = Math.round(CANVAS_W * 0.16);   // pipe width
     const PIPE_H   = Math.round(CANVAS_H * 0.62);   // each pipe segment height
-    const GAP      = Math.round(CANVAS_H * 0.22);   // vertical gap
+    const GAP      = Math.round(CANVAS_H * 0.22);   // gap between pipes
     const BIRD_SZ  = Math.round(CANVAS_W * 0.11);   // bird square size
 
     // ---- helpers ----
     const loadImg = (src) => new Promise((res)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=src; });
 
-    function createSound(srcList){
-      // pick first source; for reliable multi-plays we create a fresh Audio each time
+    // Low-latency WebAudio for "Staines" + HTMLAudio pool fallback
+    let audioCtx = null, stainesBuffer = null;
+    const htmlPool = [];
+    function encodeURL(s){ return s.replace(/ /g, "%20"); }
+
+    async function loadFirstBuffer(srcList){
+      for (const raw of srcList) {
+        try {
+          const src = encodeURL(raw);
+          const r = await fetch(src);
+          if (!r.ok) continue;
+          const arr = await r.arrayBuffer();
+          return await audioCtx.decodeAudioData(arr);
+        } catch(e){}
+      }
+      return null;
+    }
+    function playBuffer(buf, vol=1){
+      if (!audioCtx || !buf) return false;
+      try{
+        const src = audioCtx.createBufferSource();
+        const gain= audioCtx.createGain();
+        gain.gain.value = vol;
+        src.buffer = buf;
+        src.connect(gain).connect(audioCtx.destination);
+        src.start(0);
+        return true;
+      }catch(e){ return false; }
+    }
+    function makeHtmlPool(srcList, n=4){
       const src = srcList[0];
-      const play = () => {
-        try {
-          const a = new Audio(src);
-          a.currentTime = 0;
-          a.play().catch(()=>{});
-        } catch(_) {}
-      };
-      // prime on first user gesture (called from startGame)
-      const prime = () => {
-        try {
-          const a = new Audio(src);
-          a.play().then(()=>{ a.pause(); a.currentTime = 0; }).catch(()=>{});
-        } catch(_) {}
-      };
-      return { play, prime };
+      for (let i=0;i<n;i++){
+        const a = new Audio(src);
+        a.preload = "auto";
+        a.load();
+        htmlPool.push(a);
+      }
+    }
+    let poolIdx = 0;
+    function playFromPool(){
+      if (!htmlPool.length) return;
+      const a = htmlPool[poolIdx % htmlPool.length];
+      poolIdx++;
+      try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_){}
     }
 
+    function playStainesInstant(){
+      // Try WebAudio first, fallback to HTMLAudio pool
+      if (!playBuffer(stainesBuffer, 1)) playFromPool();
+    }
+
+    function createOneShotPlayer(srcList){
+      const src = encodeURL(srcList[0]);
+      return () => {
+        try { const a = new Audio(src); a.currentTime=0; a.play().catch(()=>{}); } catch(_){}
+      };
+    }
     const SFX = {
-      staines: createSound(STAINES_SRC), // play this on every score
-      hit:     createSound(HIT_SRC),
-      die:     createSound(DIE_SRC),
-      flap:    createSound(FLAP_SRC)
+      hit: createOneShotPlayer(HIT_SRC),
+      die: createOneShotPlayer(DIE_SRC)
     };
 
     // ---- state ----
@@ -102,11 +136,11 @@
         else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; SFX.flap.play(); },
+      flap(){ this.speed = -this.jump; playStainesInstant(); },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
-        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
+        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die(); gameOver(); }
       }
     };
 
@@ -140,14 +174,13 @@
         const hitTop   = overlapX && (by1 < topBottomY);
         const hitBot   = overlapX && (by2 > gapEnd);
 
-        if (hitTop || hitBot) { SFX.hit.play(); gameOver(); }
+        if (hitTop || hitBot) { SFX.hit(); gameOver(); }
 
-        // SCORE: once bird fully passes the pipe pair
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
           score++;
           scoreEl.textContent = score;
-          SFX.staines.play(); // <-- play "VOTE FOR STAINES" on every pass
+          // (No audio here anymore; "Staines" plays on FLAP instead)
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
@@ -179,9 +212,18 @@
       drawGround();
       requestAnimationFrame(loop);
     }
-    function startGame(){
-      // prime audio so iOS/Android allow play() without future popups
-      SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.flap.prime();
+
+    async function startGame(){
+      // Create AudioContext on user gesture for instant playback
+      if (!audioCtx) {
+        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
+      }
+
+      // Preload WebAudio buffer for "Staines" + build HTMLAudio pool as fallback
+      if (audioCtx && !stainesBuffer) {
+        stainesBuffer = await loadFirstBuffer(STAINES_SRC);
+      }
+      if (!htmlPool.length) { makeHtmlPool(STAINES_SRC, 4); }
 
       reset(); running = true;
       scoreEl.style.display = "block";
