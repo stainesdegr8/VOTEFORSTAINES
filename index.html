@@ -13,7 +13,7 @@
       padding:6px 10px; border-radius:10px; display:none; box-shadow:0 2px 6px rgba(0,0,0,.15);
       user-select:none;
     }
-    #gameCanvas { display:block; margin:0 auto; background:#70c5ce; }
+    #gameCanvas { display:block; margin:0 auto; background:#70c5ce; image-rendering:pixelated; }
     #startBtn {
       position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
       background:#111; color:#fff; border:none; cursor:pointer; font-weight:700; font-size:18px;
@@ -28,116 +28,120 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. =====
-    const canvas   = document.getElementById("gameCanvas");
-    const ctx      = canvas.getContext("2d");
+    // ===== Performance-tuned Flappy (same behaviour as yours) =====
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d", { alpha:false, desynchronized:true });
+    ctx.imageSmoothingEnabled = false;
+
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // ---- Filenames (match your repo) ----
-    const FILE_BG      = "bg.png";
-    const FILE_GROUND  = "ground.png";
-    const FILE_PIPE_N  = "tube1.png";
-    const FILE_PIPE_S  = "tube2.png";
-    const FILE_BIRD    = "bird.png";
+    // Files (match your repo)
+    const FILE_BG     = "bg.png";
+    const FILE_GROUND = "ground.png";
+    const FILE_PIPE_N = "tube1.png";
+    const FILE_PIPE_S = "tube2.png";
+    const FILE_BIRD   = "bird.png";
 
-    // ---- Audio (your repo has vote-for-staines.mp3) ----
     const STAINES_FILE = "vote-for-staines.mp3";
     const HIT_FILE     = "sfx_hit.mp3";
     const DIE_FILE     = "sfx_die.mp3";
     const POINT_FILE   = "sfx_point.mp3";
 
-    // Low-latency: keep one base <audio> per sound and clone on play
-    function makePool(src, count=4){
+    // Layout
+    const CANVAS_W = 420, CANVAS_H = 680;
+    const GROUND_H = (CANVAS_H * 0.18) | 0;
+    const PIPE_W   = (CANVAS_W * 0.16) | 0;
+    const PIPE_H   = (CANVAS_H * 0.62) | 0;
+    const GAP      = (CANVAS_H * 0.22) | 0;
+    const BIRD_SZ  = (CANVAS_W * 0.11) | 0;
+
+    // ---- Helpers ----
+    const loadImg = src => new Promise(r => { const i=new Image(); i.onload=()=>r(i); i.onerror=()=>r(null); i.src=src; });
+
+    // Pre-scale an image into an offscreen canvas so drawImage is cheap
+    function scalify(img, w, h){
+      if (!img) return null;
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const x = c.getContext('2d', { alpha:true, desynchronized:true });
+      x.imageSmoothingEnabled = false;
+      x.drawImage(img, 0, 0, w, h);
+      return c;
+    }
+
+    // Audio pool + small cooldown to avoid lag from overlap storms
+    function makePool(src, n=4){
       const base = new Audio(src); base.preload="auto"; base.load();
-      const pool = Array.from({length:count}, ()=> base.cloneNode(true));
-      let i = 0;
+      const pool = Array.from({length:n}, () => base.cloneNode(true));
+      let idx = 0, last = 0;
+      const SFX_COOLDOWN_MS = 120; // set to 0 if you truly want zero limit
       return {
-        prime(){ // unlock on user gesture
-          base.play().then(()=>{ base.pause(); base.currentTime=0; }).catch(()=>{});
-          pool.forEach(a=>{ try{ a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){} });
-        },
+        prime(){ [base, ...pool].forEach(a => { a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{}); }); },
         play(){
-          const a = pool[i++ % pool.length];
+          const now = performance.now();
+          if (now - last < SFX_COOLDOWN_MS) return; // throttle a bit
+          last = now;
+          const a = pool[idx++ % pool.length];
           try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_) {}
         }
       };
     }
+
     const SFX = {
-      staines: makePool(STAINES_FILE, 6), // <-- plays on FLAP
+      staines: makePool(STAINES_FILE, 6),
       hit:     makePool(HIT_FILE, 2),
       die:     makePool(DIE_FILE, 2),
       point:   makePool(POINT_FILE, 2)
     };
 
-    // ---- Layout (stable) ----
-    const CANVAS_W = 420, CANVAS_H = 680;
-    const GROUND_H = Math.round(CANVAS_H * 0.18);
-    const PIPE_W   = Math.round(CANVAS_W * 0.16);
-    const PIPE_H   = Math.round(CANVAS_H * 0.62);
-    const GAP      = Math.round(CANVAS_H * 0.22);
-    const BIRD_SZ  = Math.round(CANVAS_W * 0.11);
+    // Sprites (offscreen, pre-scaled)
+    const SPR = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
 
-    // ---- Helpers ----
-    const loadImg = (src) => new Promise(res => {
-      const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src;
-    });
-
-    // ---- State ----
-    let IM = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
-    let frames=0, score=0, running=false;
+    // State
+    let frames = 0, score = 0, running = false;
 
     const bird = {
-      x: Math.floor(CANVAS_W * 0.24),
-      y: Math.floor(CANVAS_H * 0.35),
+      x: (CANVAS_W * 0.24) | 0,
+      y: (CANVAS_H * 0.35) | 0,
       w: BIRD_SZ, h: BIRD_SZ,
-      gravity: 0.25, jump: 4.6, speed: 0, rotation: 0,
+      gravity: 0.25, jump: 4.6, speed: 0,
       draw() {
-        ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.rotation);
-        if (IM.bird) {
-          ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
-        } else {
-          // loud fallback so you SEE the bird even if image missing
-          ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill();
-          ctx.strokeStyle="#000"; ctx.lineWidth=3; ctx.stroke();
-        }
-        ctx.restore();
+        if (SPR.bird) ctx.drawImage(SPR.bird, (this.x - this.w/2) | 0, (this.y - this.h/2) | 0);
+        else { ctx.fillStyle="#ffcc00"; ctx.fillRect((this.x - this.w/2)|0, (this.y - this.h/2)|0, this.w, this.h); }
       },
-      flap(){ this.speed = -this.jump; SFX.staines.play(); }, // <-- play on EVERY tap
+      flap(){ this.speed = -this.jump; SFX.staines.play(); },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
-        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
+        if ((this.y + this.h/2) >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
       }
     };
 
     const pipes = []; // {x,y,passed}
     function spawnPipe(){
-      const minTop = -Math.round(PIPE_H * 0.85);
-      const maxTop = -Math.round(PIPE_H * 0.25);
-      const topY   = minTop + Math.random() * (maxTop - minTop);
+      const minTop = -(PIPE_H * 0.85) | 0;
+      const maxTop = -(PIPE_H * 0.25) | 0;
+      const topY   = (minTop + Math.random() * (maxTop - minTop)) | 0;
       pipes.push({ x: CANVAS_W, y: topY, passed:false });
     }
     function drawPipes(){
       for (const p of pipes) {
-        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);               // TOP
-        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H); // BOTTOM
+        ctx.drawImage(SPR.pipeN, p.x | 0, p.y | 0);
+        ctx.drawImage(SPR.pipeS, p.x | 0, (p.y + PIPE_H + GAP) | 0);
       }
     }
     function updatePipes(){
       for (const p of pipes) {
-        p.x -= 2;
+        p.x -= 2; // integer speed
 
-        // AABB collision
-        const bx1 = bird.x - bird.w/2, bx2 = bird.x + bird.w/2;
-        const by1 = bird.y - bird.h/2, by2 = bird.y + bird.h/2;
-        const px1 = p.x, px2 = p.x + PIPE_W;
+        // AABB
+        const bx1 = (bird.x - bird.w/2) | 0, bx2 = (bird.x + bird.w/2) | 0;
+        const by1 = (bird.y - bird.h/2) | 0, by2 = (bird.y + bird.h/2) | 0;
+        const px1 = p.x | 0, px2 = (p.x + PIPE_W) | 0;
 
-        const topBottomY = p.y + PIPE_H;
-        const gapStart   = topBottomY;
-        const gapEnd     = topBottomY + GAP;
+        const topBottomY = (p.y + PIPE_H) | 0;
+        const gapEnd     = (topBottomY + GAP) | 0;
 
         const overlapX = (bx2 > px1) && (bx1 < px2);
         const hitTop   = overlapX && (by1 < topBottomY);
@@ -152,45 +156,46 @@
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
-      if (frames % 100 === 0) spawnPipe();
+      if ((frames % 100) === 0) spawnPipe();
     }
 
-    function drawBG(){ if (IM.bg) ctx.drawImage(IM.bg, 0, 0, CANVAS_W, CANVAS_H - GROUND_H); }
-    function drawGround(){ if (IM.ground) ctx.drawImage(IM.ground, 0, CANVAS_H - GROUND_H, CANVAS_W, GROUND_H); }
+    function drawBG(){ ctx.drawImage(SPR.bg, 0, 0); }
+    function drawGround(){ ctx.drawImage(SPR.ground, 0, (CANVAS_H - GROUND_H) | 0); }
 
     function gameOver(){
       running = false;
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
-      renderOnce(); // show final frame
+      renderOnce(); // final frame
     }
+
     function reset(){
       score = 0; scoreEl.textContent = score;
       pipes.length = 0; frames = 0;
-      bird.y = Math.floor(CANVAS_H * 0.35);
+      bird.y = (CANVAS_H * 0.35) | 0;
       bird.speed = 0;
     }
+
     function loop(){
       if (!running) return;
       frames++;
-      renderOnce();
+      renderOnce(true);
       requestAnimationFrame(loop);
     }
 
-    function renderOnce(){
+    function renderOnce(run=false){
+      // Clear once, then only draw scaled sprites (no per-frame scaling/transforms)
       ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
       drawBG();
-      updatePipes();
+      if (run) updatePipes();
       drawPipes();
-      if (running) bird.update();
+      if (run) bird.update();
       bird.draw();
       drawGround();
     }
 
     function startGame(){
-      // Prime audio so mobile plays instantly
       SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
-
       reset(); running = true;
       scoreEl.style.display = "block";
       startBtn.style.display = "none";
@@ -198,26 +203,29 @@
     }
 
     // inputs
-    window.addEventListener("keydown", (e)=>{ if ((e.code==="Space"||e.code==="ArrowUp")) { if (running) bird.flap(); }});
+    window.addEventListener("keydown", (e)=>{ if ((e.code==="Space"||e.code==="ArrowUp") && running) bird.flap(); });
     window.addEventListener("pointerdown", ()=>{ if (running) bird.flap(); });
     startBtn.addEventListener("click", startGame);
 
-    // boot
+    // boot + pre-scale sprites once
     (async function boot(){
       const [bg, ground, pipeN, pipeS, birdImg] = await Promise.all([
         loadImg(FILE_BG), loadImg(FILE_GROUND), loadImg(FILE_PIPE_N), loadImg(FILE_PIPE_S), loadImg(FILE_BIRD)
       ]);
-      IM = { bg, ground, pipeN, pipeS, bird: birdImg };
+
+      SPR.bg     = scalify(bg, CANVAS_W, CANVAS_H - GROUND_H);
+      SPR.ground = scalify(ground, CANVAS_W, GROUND_H);
+      SPR.pipeN  = scalify(pipeN, PIPE_W, PIPE_H);
+      SPR.pipeS  = scalify(pipeS, PIPE_W, PIPE_H);
+      SPR.bird   = scalify(birdImg, BIRD_SZ, BIRD_SZ);
 
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
       startBtn.style.display = "block";
-
-      // draw a preview frame so you SEE the bird before pressing Start
-      renderOnce();
+      renderOnce(false); // preview
     })();
   </script>
 
-  <!-- ===== Disable any contact-share UI from templates ===== -->
+  <!-- Disable any contact-share UI from templates -->
   <script>
     (function(){
       const css = `.share,#share,.btn-share,[onclick*="share("]{display:none!important;visibility:hidden!important}`;
@@ -233,4 +241,3 @@
   </script>
 </body>
 </html>
-
