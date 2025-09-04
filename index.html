@@ -28,31 +28,64 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy (explicit filenames; shows top pipes + your face) =====
+    // ===== Fixed-layout Flappy with "Vote For Staines" on every score =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // ---- EXACT FILENAMES (rename your repo files to match, or change these) ----
+    // ---- EXACT FILENAMES (change if yours differ) ----
     const FILE_BG      = "bg.png";
     const FILE_GROUND  = "ground.png";
     const FILE_PIPE_N  = "tube1.png";      // top pipe image
     const FILE_PIPE_S  = "tube2.png";      // bottom pipe image
     const FILE_BIRD    = "smallbird.png";  // your face sprite (PNG)
 
-    // ---- Canvas proportions (tweak if you want) ----
-    const CANVAS_W = 420, CANVAS_H = 680;           // logical size
+    // ---- AUDIO (first existing filename will be used) ----
+    const STAINES_SRC = ["vote for staines.mp3","vote-for-staines.mp3","voteforstaines.mp3","staines.mp3"];
+    const HIT_SRC     = ["sfx_hit.mp3"];
+    const DIE_SRC     = ["sfx_die.mp3"];
+    const FLAP_SRC    = ["sfx_swooshing.mp3"]; // soft flap (optional)
+
+    // ---- Canvas proportions (stable layout) ----
+    const CANVAS_W = 420, CANVAS_H = 680;           // logical canvas size
     const GROUND_H = Math.round(CANVAS_H * 0.18);   // ground thickness
     const PIPE_W   = Math.round(CANVAS_W * 0.16);   // pipe width
     const PIPE_H   = Math.round(CANVAS_H * 0.62);   // each pipe segment height
-    const GAP      = Math.round(CANVAS_H * 0.22);   // gap between pipes
+    const GAP      = Math.round(CANVAS_H * 0.22);   // vertical gap
     const BIRD_SZ  = Math.round(CANVAS_W * 0.11);   // bird square size
 
-    // ---- Load helpers ----
+    // ---- helpers ----
     const loadImg = (src) => new Promise((res)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=src; });
 
-    // ---- State ----
+    function createSound(srcList){
+      // pick first source; for reliable multi-plays we create a fresh Audio each time
+      const src = srcList[0];
+      const play = () => {
+        try {
+          const a = new Audio(src);
+          a.currentTime = 0;
+          a.play().catch(()=>{});
+        } catch(_) {}
+      };
+      // prime on first user gesture (called from startGame)
+      const prime = () => {
+        try {
+          const a = new Audio(src);
+          a.play().then(()=>{ a.pause(); a.currentTime = 0; }).catch(()=>{});
+        } catch(_) {}
+      };
+      return { play, prime };
+    }
+
+    const SFX = {
+      staines: createSound(STAINES_SRC), // play this on every score
+      hit:     createSound(HIT_SRC),
+      die:     createSound(DIE_SRC),
+      flap:    createSound(FLAP_SRC)
+    };
+
+    // ---- state ----
     let IM = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
     let frames=0, score=0, running=false;
 
@@ -69,17 +102,16 @@
         else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; try { const a=new Audio("sfx_swooshing.mp3"); a.currentTime=0; a.play(); } catch(_){} },
+      flap(){ this.speed = -this.jump; SFX.flap.play(); },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
-        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; try{ new Audio("sfx_die.mp3").play(); }catch(_){}; gameOver(); }
+        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
       }
     };
 
     const pipes = []; // {x,y,passed}
     function spawnPipe(){
-      // Top pipe's top-left Y (negative so it sticks down)
       const minTop = -Math.round(PIPE_H * 0.85);
       const maxTop = -Math.round(PIPE_H * 0.25);
       const topY   = minTop + Math.random() * (maxTop - minTop);
@@ -87,33 +119,35 @@
     }
     function drawPipes(){
       for (const p of pipes) {
-        // TOP pipe (this is what was missing if FILE_PIPE_N didn't load)
-        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);
-        // BOTTOM pipe
-        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H);
+        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);               // TOP
+        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H); // BOTTOM
       }
     }
     function updatePipes(){
       for (const p of pipes) {
         p.x -= 2;
 
-        // Collision (AABB vs top/bottom rectangles)
+        // AABB vs rectangles
         const bx1 = bird.x - bird.w/2, bx2 = bird.x + bird.w/2;
         const by1 = bird.y - bird.h/2, by2 = bird.y + bird.h/2;
         const px1 = p.x, px2 = p.x + PIPE_W;
 
-        const topBottomY = p.y + PIPE_H;       // bottom edge of top pipe
-        const gapStart   = topBottomY;         // start of gap
-        const gapEnd     = topBottomY + GAP;   // end of gap
+        const topBottomY = p.y + PIPE_H;
+        const gapStart   = topBottomY;
+        const gapEnd     = topBottomY + GAP;
 
         const overlapX = (bx2 > px1) && (bx1 < px2);
         const hitTop   = overlapX && (by1 < topBottomY);
         const hitBot   = overlapX && (by2 > gapEnd);
 
-        if (hitTop || hitBot) { try{ new Audio("sfx_hit.mp3").play(); }catch(_){}; gameOver(); }
+        if (hitTop || hitBot) { SFX.hit.play(); gameOver(); }
 
+        // SCORE: once bird fully passes the pipe pair
         if (!p.passed && px2 < bird.x) {
-          p.passed = true; score++; scoreEl.textContent = score; try{ new Audio("sfx_point.mp3").play(); }catch(_){}
+          p.passed = true;
+          score++;
+          scoreEl.textContent = score;
+          SFX.staines.play(); // <-- play "VOTE FOR STAINES" on every pass
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
@@ -125,7 +159,6 @@
 
     function gameOver(){
       running = false;
-      try{ new Audio("sfx_swooshing.mp3").play(); }catch(_){}
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
     }
@@ -147,6 +180,9 @@
       requestAnimationFrame(loop);
     }
     function startGame(){
+      // prime audio so iOS/Android allow play() without future popups
+      SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.flap.prime();
+
       reset(); running = true;
       scoreEl.style.display = "block";
       startBtn.style.display = "none";
@@ -165,16 +201,7 @@
       ]);
       IM = { bg, ground, pipeN, pipeS, bird: birdImg };
 
-      // force canvas size (in case attributes were changed)
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
-
-      // QUICK DIAGNOSTIC: if any image missing, log it once to console
-      if (!bg)     console.log("Missing image:", FILE_BG);
-      if (!ground) console.log("Missing image:", FILE_GROUND);
-      if (!pipeN)  console.log("Missing image:", FILE_PIPE_N, "(TOP pipes will not show)");
-      if (!pipeS)  console.log("Missing image:", FILE_PIPE_S);
-      if (!birdImg)console.log("Missing image:", FILE_BIRD, "(you'll see a yellow circle instead)");
-
       startBtn.style.display = "block";
     })();
   </script>
