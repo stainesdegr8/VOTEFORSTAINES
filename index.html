@@ -6,29 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <style>
     html, body { margin:0; padding:0; height:100%; }
-    body { background:#70c5ce; overflow:hidden; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { background:#70c5ce; overflow:hidden; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     #score {
       position:absolute; top:14px; left:14px;
-      background:rgba(255,255,255,.8);
-      color:#111; font-weight:700; font-size:22px;
-      padding:6px 10px; border-radius:10px; display:none;
-      box-shadow:0 2px 6px rgba(0,0,0,.15);
+      background:rgba(255,255,255,.85); color:#111; font-weight:700; font-size:22px;
+      padding:6px 10px; border-radius:10px; display:none; box-shadow:0 2px 6px rgba(0,0,0,.15);
       user-select:none;
     }
     #gameCanvas { display:block; margin:0 auto; background:#70c5ce; }
     #startBtn {
-      position:absolute; top:50%; left:50%;
-      transform:translate(-50%,-50%);
-      background:#111; color:#fff; border:none; cursor:pointer;
-      font-weight:700; font-size:18px; letter-spacing:.2px;
-      padding:12px 22px; border-radius:12px;
-      box-shadow:0 8px 24px rgba(0,0,0,.25);
-      display:none;
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      background:#111; color:#fff; border:none; cursor:pointer; font-weight:700; font-size:18px;
+      padding:12px 22px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25); display:none;
     }
-    /* mobile full bleed */
-    @media (max-width:480px){
-      #gameCanvas { width:100vw; height:auto; }
-    }
+    @media (max-width:480px){ #gameCanvas { width:100vw; height:auto; } }
   </style>
 </head>
 <body>
@@ -37,274 +28,176 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Stable-sizing Flappy core (all sprites scaled consistently) =====
-    const canvas  = document.getElementById("gameCanvas");
-    const ctx     = canvas.getContext("2d");
-    const scoreEl = document.getElementById("score");
-    const startBtn= document.getElementById("startBtn");
+    // ===== Fixed-layout Flappy (stable sizes, no reliance on image dimensions) =====
+    const canvas   = document.getElementById("gameCanvas");
+    const ctx      = canvas.getContext("2d");
+    const scoreEl  = document.getElementById("score");
+    const startBtn = document.getElementById("startBtn");
 
-    // --- assets: tries fallbacks so your existing filenames work ---
-    const IMG_SRC = {
-      bg:       ["bg.png"],
-      ground:   ["ground.png"],
-      pipeN:    ["tube1.png","PipeNorth.png"],
-      pipeS:    ["tube2.png","PipeSouth.png"],
-      bird:     ["smallbird.png","bird.png","player.png"] // your face sprite
+    // ---------- CANVAS LAYOUT (edit these 5 lines if you want different proportions) ----------
+    const CANVAS_W   = 420, CANVAS_H = 680;                 // internal logical size
+    const GROUND_H   = Math.round(CANVAS_H * 0.18);         // ground thickness (px)
+    const PIPE_W     = Math.round(CANVAS_W * 0.16);         // pipe width (px)
+    const PIPE_H     = Math.round(CANVAS_H * 0.62);         // pipe on-screen height (px) per segment
+    const GAP        = Math.round(CANVAS_H * 0.22);         // vertical gap between pipes (px)
+    const BIRD_SIZE  = Math.round(CANVAS_W * 0.11);         // bird square size (px)
+
+    // ---------- ASSET FILENAMES (kept flexible; use any one that exists) ----------
+    const IMG = {
+      bg:     ["bg.png"],                     // drawn stretched
+      ground: ["ground.png"],                 // drawn stretched
+      pipeN:  ["tube1.png","PipeNorth.png"],  // drawn to PIPE_W x PIPE_H
+      pipeS:  ["tube2.png","PipeSouth.png"],  // drawn to PIPE_W x PIPE_H
+      bird:   ["smallbird.png","bird.png","player.png"] // drawn to BIRD_SIZE square
     };
-    const SFX_SRC = {
+    const SFX = {
       flap:   ["sfx_swooshing.mp3", "vote for staines.mp3", "vote_for_staines.mp3"],
-      hit:    ["sfx_hit.mp3"],
-      die:    ["sfx_die.mp3"],
-      point:  ["sfx_point.mp3"],
-      whoosh: ["sfx_swooshing.mp3"]
+      hit:    ["sfx_hit.mp3"], die: ["sfx_die.mp3"], point: ["sfx_point.mp3"]
     };
 
-    const loadImageFallback = (list) => new Promise(async (resolve) => {
+    // ---------- helpers ----------
+    const loadImageFirst = (list) => new Promise(async (resolve) => {
       for (const src of list) {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => {
-          // try next
-          if (src === list[list.length - 1]) resolve(null);
-        };
-        img.src = src;
-        // wait briefly for error/load; next will trigger if error
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = () => resolve(null);   // move on; we stretch/draw fallbacks anyway
+        im.src = src;
         await new Promise(r => setTimeout(r, 0));
+        if (im.complete && im.naturalWidth) return; // resolved via onload
       }
+      resolve(null);
     });
+    const play = (srcList) => { try { const a = new Audio(srcList[0]); a.currentTime = 0; a.play().catch(()=>{}); } catch(_){} };
 
-    const playAny = (list, {allowOverlap=false}={}) => {
-      try {
-        const a = new Audio(list[0]);
-        if (!allowOverlap) a.currentTime = 0;
-        a.play().catch(()=>{});
-      } catch(e){}
-    };
-
-    // game state & scaling
+    // ---------- game state ----------
     let IM = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
-    let SCALE = 1;
-    let GROUND_H = 0, PIPE_W = 0, PIPE_H_N = 0, PIPE_H_S = 0, GAP = 140;
     let frames = 0, score = 0, running = false;
 
     const bird = {
-      x: 0, y: 0, w: 40, h: 40,
+      x: Math.floor(CANVAS_W * 0.24),
+      y: Math.floor(CANVAS_H * 0.35),
+      w: BIRD_SIZE, h: BIRD_SIZE,
       gravity: 0.25, jump: 4.6, speed: 0, rotation: 0,
       draw() {
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.rotation);
-        if (IM.bird) {
-          ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
-        } else {
-          ctx.fillStyle = "#ffcc00";
-          ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill();
-        }
+        if (IM.bird) ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
+        else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); }
         ctx.restore();
       },
-      flap() {
-        this.speed = -this.jump;
-        playAny(SFX_SRC.flap, {allowOverlap:true});
-      },
-      update() {
-        this.speed += this.gravity;
-        this.y     += this.speed;
-
-        const floorY = canvas.height - GROUND_H;
-        if (this.y + this.h/2 >= floorY) {
-          this.y = floorY - this.h/2;
-          playAny(SFX_SRC.die);
-          gameOver();
-        }
+      flap(){ this.speed = -this.jump; play(SFX.flap); },
+      update(){
+        this.speed += this.gravity; this.y += this.speed;
+        const floorY = CANVAS_H - GROUND_H;
+        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; play(SFX.die); gameOver(); }
       }
     };
 
-    const pipes = [];
-    function spawnPipe() {
-      // keep gap comfortably on-screen
-      const minTop = -PIPE_H_N * 0.85;
-      const maxTop = -PIPE_H_N * 0.25;
+    const pipes = [];  // each: {x,y,passed}
+    function spawnPipe(){
+      const minTop = -Math.round(PIPE_H * 0.85);
+      const maxTop = -Math.round(PIPE_H * 0.25);
       const topY   = minTop + Math.random() * (maxTop - minTop);
-      pipes.push({ x: canvas.width, y: topY, passed:false });
+      pipes.push({ x: CANVAS_W, y: topY, passed:false });
     }
-
-    function drawBackground() {
-      if (IM.bg) {
-        // stretch bg to width; fill top area (above ground)
-        ctx.drawImage(IM.bg, 0, 0, canvas.width, canvas.height - GROUND_H);
-      } else {
-        ctx.fillStyle = "#70c5ce"; ctx.fillRect(0,0,canvas.width,canvas.height - GROUND_H);
-      }
-    }
-
-    function drawGround() {
-      if (IM.ground) {
-        ctx.drawImage(IM.ground, 0, canvas.height - GROUND_H, canvas.width, GROUND_H);
-      } else {
-        ctx.fillStyle = "#de9e36"; ctx.fillRect(0, canvas.height - 64, canvas.width, 64);
-      }
-    }
-
-    function drawPipes() {
+    function drawPipes(){
       for (const p of pipes) {
-        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H_N);
-        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H_N + GAP, PIPE_W, PIPE_H_S);
+        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);  // top
+        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H); // bottom
       }
     }
-
-    function updatePipes() {
+    function updatePipes(){
       for (const p of pipes) {
-        p.x -= 2; // pipe speed
+        p.x -= 2;
 
-        // AABB collision
+        // AABB vs top/bottom rectangles
         const bx1 = bird.x - bird.w/2, bx2 = bird.x + bird.w/2;
         const by1 = bird.y - bird.h/2, by2 = bird.y + bird.h/2;
         const px1 = p.x, px2 = p.x + PIPE_W;
 
-        const hitTop = (bx2 > px1 && bx1 < px2) && (by1 < p.y + PIPE_H_N);
-        const hitBot = (bx2 > px1 && bx1 < px2) && (by2 > p.y + PIPE_H_N + GAP);
-        if (hitTop || hitBot) {
-          playAny(SFX_SRC.hit);
-          gameOver();
-        }
+        const topBottomY = p.y + PIPE_H;
+        const gapStart   = topBottomY;
+        const gapEnd     = topBottomY + GAP;
 
-        // scoring
-        if (!p.passed && px2 < bird.x) {
-          p.passed = true;
-          score++;
-          scoreEl.textContent = score;
-          playAny(SFX_SRC.point, {allowOverlap:true});
-        }
+        const overlapX = (bx2 > px1) && (bx1 < px2);
+        const hitTop   = overlapX && (by1 < topBottomY);
+        const hitBot   = overlapX && (by2 > gapEnd);
+
+        if (hitTop || hitBot) { play(SFX.hit); gameOver(); }
+
+        if (!p.passed && px2 < bird.x) { p.passed = true; score++; scoreEl.textContent = score; play(SFX.point); }
       }
-
-      // recycle left pipes
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
-
-      // spawn cadence tuned to speed
       if (frames % 100 === 0) spawnPipe();
     }
 
-    function gameOver() {
+    function drawBG(){ if (IM.bg) ctx.drawImage(IM.bg, 0, 0, CANVAS_W, CANVAS_H - GROUND_H); }
+    function drawGround(){ if (IM.ground) ctx.drawImage(IM.ground, 0, CANVAS_H - GROUND_H, CANVAS_W, GROUND_H); }
+
+    function gameOver(){
       running = false;
-      playAny(SFX_SRC.whoosh, {allowOverlap:true});
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
     }
-
-    function reset() {
-      score = 0;
-      scoreEl.textContent = score;
-      pipes.length = 0;
-      frames = 0;
-      bird.y = Math.floor(canvas.height * 0.35);
+    function reset(){
+      score = 0; scoreEl.textContent = score;
+      pipes.length = 0; frames = 0;
+      bird.y = Math.floor(CANVAS_H * 0.35);
       bird.speed = 0;
     }
-
-    function loop() {
+    function loop(){
       if (!running) return;
       frames++;
-
-      drawBackground();
+      ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
+      drawBG();
       updatePipes();
       drawPipes();
-      bird.update();
-      bird.draw();
+      bird.update(); bird.draw();
       drawGround();
-
       requestAnimationFrame(loop);
     }
-
-    function startGame() {
-      reset();
-      running = true;
+    function startGame(){
+      reset(); running = true;
       scoreEl.style.display = "block";
       startBtn.style.display = "none";
       loop();
     }
 
     // input
-    window.addEventListener("keydown", (e)=>{
-      if ((e.code === "Space" || e.code === "ArrowUp") && running) bird.flap();
-    });
-    window.addEventListener("pointerdown", ()=>{
-      if (running) bird.flap();
-    });
+    window.addEventListener("keydown", (e)=>{ if ((e.code==="Space"||e.code==="ArrowUp") && running) bird.flap(); });
+    window.addEventListener("pointerdown", ()=>{ if (running) bird.flap(); });
     startBtn.addEventListener("click", startGame);
 
-    // boot: load images, compute SCALE from bg width, then reveal Start
+    // boot: load images (we don't use their sizes), then reveal start
     (async function boot(){
       const [bg, ground, pipeN, pipeS, birdImg] = await Promise.all([
-        loadImageFallback(IMG_SRC.bg),
-        loadImageFallback(IMG_SRC.ground),
-        loadImageFallback(IMG_SRC.pipeN),
-        loadImageFallback(IMG_SRC.pipeS),
-        loadImageFallback(IMG_SRC.bird)
+        loadImageFirst(IMG.bg), loadImageFirst(IMG.ground),
+        loadImageFirst(IMG.pipeN), loadImageFirst(IMG.pipeS),
+        loadImageFirst(IMG.bird)
       ]);
       IM = { bg, ground, pipeN, pipeS, bird: birdImg };
 
-      // robust defaults if any image missing
-      const bgW = (bg && bg.naturalWidth) ? bg.naturalWidth : canvas.width;
-      SCALE     = canvas.width / bgW;
-
-      const groundHnat = (ground && ground.naturalHeight) ? ground.naturalHeight : 64;
-      GROUND_H  = groundHnat * SCALE;
-
-      const pipeWnat = (pipeN && pipeN.naturalWidth) ? pipeN.naturalWidth : 52;
-      const pipeHNtn = (pipeN && pipeN.naturalHeight) ? pipeN.naturalHeight : 320;
-      const pipeHSnt = (pipeS && pipeS.naturalHeight) ? pipeS.naturalHeight : 320;
-      PIPE_W    = pipeWnat * SCALE;
-      PIPE_H_N  = pipeHNtn * SCALE;
-      PIPE_H_S  = pipeHSnt * SCALE;
-
-      const GAP_BASE = 140;           // logical gap
-      GAP = GAP_BASE * SCALE;
-
-      // bird size: clamp to look right on any device
-      const target = Math.max(32, Math.min(56, 44 * SCALE));
-      bird.w = bird.h = target;
-
-      // bird start position
-      bird.x = Math.floor(canvas.width * 0.24);
-      bird.y = Math.floor(canvas.height * 0.35);
+      // force canvas logical size (in case HTML editors changed it)
+      canvas.width = CANVAS_W; canvas.height = CANVAS_H;
 
       startBtn.style.display = "block";
     })();
   </script>
 
-  <!-- ===== Share/UI suppression (no contact-share prompts, no extra popups) ===== -->
+  <!-- ===== Kill "share to contacts" (no popups) ===== -->
   <script>
-    (function () {
-      // Hide any share buttons the template might include
-      const css = `
-        .share, #share, .btn-share, [onclick*="share("] {
-          display: none !important; visibility: hidden !important;
-        }
-      `;
-      const st = document.createElement('style');
-      st.textContent = css;
-      document.head.appendChild(st);
-
-      // Neutralize global share() if template calls it on death
-      window.share = function () { /* disabled */ };
-
-      // Neutralize native Web Share API if invoked
-      if (navigator.share) {
-        navigator.share = () => Promise.resolve();
-      }
-
-      // Block typical social share popups if code tries window.open
+    (function(){
+      const css = `.share,#share,.btn-share,[onclick*="share("]{display:none!important;visibility:hidden!important}`;
+      const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+      window.share = function(){};
+      if (navigator.share) navigator.share = () => Promise.resolve();
       const _open = window.open;
-      window.open = function (url, ...rest) {
-        if (typeof url === 'string' && /t\.me\/share|telegram\.me|whatsapp|facebook|twitter|mailto:/i.test(url)) {
-          return null;
-        }
+      window.open = function(url, ...rest){
+        if (typeof url === 'string' && /t\.me\/share|telegram\.me|whatsapp|facebook|twitter|mailto:/i.test(url)) return null;
         return _open ? _open(url, ...rest) : null;
       };
-
-      // If some older script calls reportScore(), make it a no-op
-      window.reportScore = function () {};
     })();
   </script>
 </body>
 </html>
-
