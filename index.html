@@ -187,5 +187,19 @@
 
     startBtn.addEventListener("click", startGame);
   </script>
+  <script src="https://telegram.org/js/games.js"></script>
+<script>
+  function reportScore(score) {
+    if (window.TelegramGameProxy && typeof TelegramGameProxy.shareScore === 'function') {
+      TelegramGameProxy.shareScore(score);
+    } else {
+      alert('Score: ' + score);
+    }
+  }
+  // TEMP: force a score prompt after 7s. Remove later.
+  setTimeout(() => reportScore(10), 7000);
+</script>
+
 </body>
 </html>
+
