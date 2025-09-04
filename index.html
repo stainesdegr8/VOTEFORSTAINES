@@ -14,32 +14,32 @@
       user-select:none;
     }
     #finalScore{
-      position:absolute; left:50%; top:32%;
+      position:absolute; left:50%;
       transform:translateX(-50%);
-      background:rgba(0,0,0,.75); color:#fff;
-      padding:14px 18px; border-radius:14px;
+      background:rgba(0,0,0,.78); color:#fff;
+      padding:12px 16px; border-radius:14px;
       font-size:20px; font-weight:800; letter-spacing:.3px;
       display:none; text-align:center; white-space:nowrap;
       box-shadow:0 10px 28px rgba(0,0,0,.25);
-      user-select:none;
+      user-select:none; z-index:2;
     }
     #gameCanvas { display:block; margin:0 auto; background:#70c5ce; }
     #startBtn{
       position:absolute; top:55%; left:50%; transform:translate(-50%,-50%);
       background:#111; color:#fff; border:none; cursor:pointer; font-weight:700; font-size:18px;
-      padding:12px 22px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25); display:none;
+      padding:12px 22px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25); display:none; z-index:1;
     }
     @media (max-width:480px){ #gameCanvas{width:100vw;height:auto;} }
   </style>
 </head>
 <body>
   <div id="score">0</div>
-  <div id="finalScore">Game Over • Score: <span id="finalNum">0</span></div>
+  <div id="finalScore">Score: <span id="finalNum">0</span></div>
   <canvas id="gameCanvas" width="420" height="680"></canvas>
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. Shows final score on death. =====
+    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
@@ -60,17 +60,13 @@
     const DIE_FILE     = "sfx_die.mp3";
     const POINT_FILE   = "sfx_point.mp3";
 
-    // Small preloaded audio pools (low-latency & overlap-safe)
+    // Small preloaded audio pools (low-latency)
     function makePool(src, count=4){
       const base = new Audio(src); base.preload="auto"; base.load();
       const pool = Array.from({length:count}, ()=> base.cloneNode(true));
       let i = 0;
       return {
-        prime(){  // unlock on first gesture
-          [base, ...pool].forEach(a=>{
-            try{ a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){}
-          });
-        },
+        prime(){ [base, ...pool].forEach(a=>{ try{ a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{});}catch(_){}}); },
         play(){ const a = pool[i++ % pool.length]; try{ a.currentTime=0; a.play().catch(()=>{});}catch(_){}; }
       };
     }
@@ -104,9 +100,7 @@
       w: BIRD_SZ, h: BIRD_SZ,
       gravity: 0.25, jump: 4.6, speed: 0, rotation: 0,
       draw() {
-        ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.rotation);
+        ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.rotation);
         if (IM.bird) { ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h); }
         else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#000"; ctx.lineWidth=3; ctx.stroke(); }
         ctx.restore();
@@ -128,8 +122,8 @@
     }
     function drawPipes(){
       for (const p of pipes) {
-        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);               // TOP
-        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H); // BOTTOM
+        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);
+        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H);
       }
     }
     function updatePipes(){
@@ -141,7 +135,6 @@
         const px1 = p.x, px2 = p.x + PIPE_W;
 
         const topBottomY = p.y + PIPE_H;
-        const gapStart   = topBottomY;
         const gapEnd     = topBottomY + GAP;
 
         const overlapX = (bx2 > px1) && (bx1 < px2);
@@ -150,7 +143,6 @@
 
         if (hitTop || hitBot) { SFX.hit.play(); gameOver(); }
 
-        // score when fully passed
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
           score++; scoreEl.textContent = score;
@@ -164,13 +156,22 @@
     function drawBG(){ if (IM.bg) ctx.drawImage(IM.bg, 0, 0, CANVAS_W, CANVAS_H - GROUND_H); }
     function drawGround(){ if (IM.ground) ctx.drawImage(IM.ground, 0, CANVAS_H - GROUND_H, CANVAS_W, GROUND_H); }
 
+    function positionFinalScoreAboveButton(){
+      finalNum.textContent = score;
+      finalBox.style.display = "block";
+      // Let layout compute size first
+      requestAnimationFrame(() => {
+        const top = startBtn.offsetTop - finalBox.offsetHeight - 12; // 12px gap above button
+        finalBox.style.top = `${Math.max(12, top)}px`;               // never go off-screen
+      });
+    }
+
     function gameOver(){
       running = false;
-      startBtn.style.display = "block";
-      scoreEl.style.display  = "block"; // keep score visible
-      finalNum.textContent   = score;   // show final score overlay
-      finalBox.style.display = "block";
-      renderOnce(); // freeze final frame
+      startBtn.style.display = "block";        // show button
+      scoreEl.style.display  = "block";        // keep small counter visible
+      positionFinalScoreAboveButton();         // <-- final score right above Start
+      renderOnce();                            // freeze final frame
     }
 
     function reset(){
@@ -178,7 +179,7 @@
       pipes.length = 0; frames = 0;
       bird.y = Math.floor(CANVAS_H * 0.35);
       bird.speed = 0;
-      finalBox.style.display = "none";  // hide overlay when restarting
+      finalBox.style.display = "none";
     }
 
     function loop(){
@@ -199,9 +200,7 @@
     }
 
     function startGame(){
-      // prime audio pools so mobile plays instantly
       SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
-
       reset(); running = true;
       scoreEl.style.display = "block";
       startBtn.style.display = "none";
@@ -221,7 +220,7 @@
       IM = { bg, ground, pipeN, pipeS, bird: birdImg };
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
       startBtn.style.display = "block";
-      renderOnce(false); // preview frame (shows bird before start)
+      renderOnce(false); // preview frame
     })();
   </script>
 
@@ -241,3 +240,4 @@
   </script>
 </body>
 </html>
+
