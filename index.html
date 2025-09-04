@@ -207,6 +207,44 @@
       };
     })();
   </script>
+  <script>
+  // Remove any visible "share" UI and make share() do nothing
+  (function () {
+    // Hide common share buttons
+    const css = `
+      .share, #share, .btn-share, [onclick*="share("] {
+        display: none !important;
+        visibility: hidden !important;
+      }
+    `;
+    const st = document.createElement('style');
+    st.textContent = css;
+    document.head.appendChild(st);
+
+    // If the template calls share(score), block it
+    window.share = function () { /* no-op: disable contact sharing */ };
+
+    // If any code tries the native Web Share API, neutralize it
+    if (navigator.share) {
+      navigator.share = () => Promise.resolve();
+    }
+
+    // Block typical social share popups if template tries window.open
+    const open = window.open;
+    window.open = function (url, ...rest) {
+      if (typeof url === 'string' &&
+          /t\.me\/share|telegram\.me|whatsapp|facebook|twitter|mailto:/i.test(url)) {
+        return null; // block share popups
+      }
+      return open ? open(url, ...rest) : null;
+    };
+
+    // Also neutralize any leftover score hook
+    window.reportScore = function () { /* no-op */ };
+  })();
+</script>
+
 </body>
 </html>
+
 
