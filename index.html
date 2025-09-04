@@ -198,8 +198,44 @@
   }
 
 </script>
+<script src="https://telegram.org/js/games.js"></script>
+<script>
+  const BOT_API_URL = "https://flappystainesbot-production.up.railway.app";
+
+  // IDs appended by the bot when opening the game
+  const Q = new URLSearchParams(location.search);
+  const PLAYER_ID = Q.get("u");
+  const CHAT_ID   = Q.get("c");
+  const MSG_ID    = Q.get("m");
+  const INLINE_ID = Q.get("i");
+
+  async function sendScoreToBot(score) {
+    try {
+      await fetch(`${BOT_API_URL}/setscore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          score: Number(score),
+          u: PLAYER_ID, c: CHAT_ID, m: MSG_ID, i: INLINE_ID
+        })
+      });
+    } catch (e) {
+      console.log("sendScoreToBot failed", e);
+    }
+  }
+
+  // Call this on Game Over
+  function reportScore(score) { sendScoreToBot(score); }
+
+  // Most FlappyCreator builds call share(finalScore) on death — override it
+  window.share = function(score){ reportScore(score); };
+
+  // // Optional quick test:
+  // setTimeout(()=>reportScore(10), 5000);
+</script>
 
 </body>
 </html>
+
 
 
