@@ -28,7 +28,7 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Performance-tuned Flappy =====
+    // ===== Original feel, optimized under the hood =====
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d", { alpha:false, desynchronized:true });
     ctx.imageSmoothingEnabled = false;
@@ -36,7 +36,7 @@
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // Files
+    // Files (your repo)
     const FILE_BG     = "bg.png";
     const FILE_GROUND = "ground.png";
     const FILE_PIPE_N = "tube1.png";
@@ -48,17 +48,18 @@
     const DIE_FILE     = "sfx_die.mp3";
     const POINT_FILE   = "sfx_point.mp3";
 
-    // Layout (integers to avoid sub-pixel work)
+    // Layout (same numbers as before)
     const CANVAS_W = 420, CANVAS_H = 680;
-    const GROUND_H = (CANVAS_H * 0.18) | 0;
-    const PIPE_W   = (CANVAS_W * 0.16) | 0;
-    const PIPE_H   = (CANVAS_H * 0.62) | 0;
-    const GAP      = (CANVAS_H * 0.22) | 0;
-    const BIRD_SZ  = (CANVAS_W * 0.11) | 0;
+    const GROUND_H = Math.round(CANVAS_H * 0.18);
+    const PIPE_W   = Math.round(CANVAS_W * 0.16);
+    const PIPE_H   = Math.round(CANVAS_H * 0.62);
+    const GAP      = Math.round(CANVAS_H * 0.22);
+    const BIRD_SZ  = Math.round(CANVAS_W * 0.11);
 
     // Helpers
     const loadImg = src => new Promise(r => { const i=new Image(); i.onload=()=>r(i); i.onerror=()=>r(null); i.src=src; });
 
+    // Pre-scale once (no per-frame scaling)
     function scalify(img, w, h){
       if (!img) return null;
       const c = document.createElement('canvas');
@@ -69,69 +70,58 @@
       return c;
     }
 
-    // HTMLAudio pools for light SFX
-    function makePool(src, n=3){
+    // HTMLAudio pools
+    function makePool(src, n=4){
       const base = new Audio(src); base.preload="auto"; base.load();
       const pool = Array.from({length:n}, () => base.cloneNode(true));
-      let idx = 0;
+      let i = 0, last = 0;
+      const SFX_COOLDOWN_MS = 100; // small throttle; set 0 for none
       return {
         prime(){ [base, ...pool].forEach(a => { a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{}); }); },
-        play(){ const a = pool[idx++ % pool.length]; try{ a.currentTime=0; a.play().catch(()=>{});}catch(_){}; }
+        play(){
+          const now = performance.now();
+          if (now - last < SFX_COOLDOWN_MS) return;
+          last = now;
+          const a = pool[i++ % pool.length];
+          try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_) {}
+        }
       };
     }
 
     const SFX = {
-      hit:   makePool(HIT_FILE, 2),
-      die:   makePool(DIE_FILE, 2),
-      point: makePool(POINT_FILE, 2)
+      staines: makePool(STAINES_FILE, 6), // plays on flap
+      hit:     makePool(HIT_FILE, 2),
+      die:     makePool(DIE_FILE, 2),
+      point:   makePool(POINT_FILE, 2)
     };
 
-    // WebAudio for the flap (MUCH lighter than many HTMLAudio plays)
-    let audioCtx = null, stainesBuf = null;
-    const FLAP_SNIP = 0.8; // seconds to play from start (trim if your file is long)
-
-    async function loadStainesBuffer(){
-      try{
-        const res = await fetch(STAINES_FILE);
-        const arr = await res.arrayBuffer();
-        stainesBuf = await audioCtx.decodeAudioData(arr);
-      }catch(e){ stainesBuf = null; }
-    }
-    function playStaines(){
-      if (!audioCtx || !stainesBuf) return;
-      try{
-        const src = audioCtx.createBufferSource();
-        src.buffer = stainesBuf;
-        src.connect(audioCtx.destination);
-        const dur = Math.min(FLAP_SNIP, stainesBuf.duration);
-        src.start(0, 0, dur); // play only first X seconds to reduce load
-      }catch(_){}
-    }
-
-    // Sprites (pre-scaled offscreens)
+    // Sprites (offscreen, pre-scaled)
     const SPR = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
 
     // State
-    let frames = 0, score = 0, running = false;
+    let frames=0, score=0, running=false;
 
     const bird = {
-      x: (CANVAS_W * 0.24) | 0,
-      y: (CANVAS_H * 0.35) | 0,
+      x: Math.floor(CANVAS_W * 0.24),
+      y: Math.floor(CANVAS_H * 0.35),
       w: BIRD_SZ, h: BIRD_SZ,
       gravity: 0.25, jump: 4.6, speed: 0,
-      draw(){ if (SPR.bird) ctx.drawImage(SPR.bird, (this.x - this.w/2)|0, (this.y - this.h/2)|0); else { ctx.fillStyle="#ff0"; ctx.fillRect((this.x - this.w/2)|0,(this.y - this.h/2)|0,this.w,this.h);} },
-      flap(){ this.speed = -this.jump; playStaines(); },
+      draw(){ // no save/restore/rotate
+        if (SPR.bird) ctx.drawImage(SPR.bird, (this.x - this.w/2)|0, (this.y - this.h/2)|0);
+        else { ctx.fillStyle="#ffcc00"; ctx.fillRect((this.x - this.w/2)|0,(this.y - this.h/2)|0,this.w,this.h); }
+      },
+      flap(){ this.speed = -this.jump; SFX.staines.play(); },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
-        if ((this.y + this.h/2) >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
+        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; SFX.die.play(); gameOver(); }
       }
     };
 
     const pipes = []; // {x,y,passed}
     function spawnPipe(){
-      const minTop = -(PIPE_H * 0.85) | 0;
-      const maxTop = -(PIPE_H * 0.25) | 0;
+      const minTop = -Math.round(PIPE_H * 0.85);
+      const maxTop = -Math.round(PIPE_H * 0.25);
       const topY   = (minTop + Math.random() * (maxTop - minTop)) | 0;
       pipes.push({ x: CANVAS_W, y: topY, passed:false });
     }
@@ -143,9 +133,9 @@
     }
     function updatePipes(){
       for (const p of pipes) {
-        p.x -= 2;
+        p.x -= 2; // same speed as before
 
-        // AABB
+        // AABB collision
         const bx1 = (bird.x - bird.w/2)|0, bx2 = (bird.x + bird.w/2)|0;
         const by1 = (bird.y - bird.h/2)|0, by2 = (bird.y + bird.h/2)|0;
         const px1 = p.x|0, px2 = (p.x + PIPE_W)|0;
@@ -166,7 +156,8 @@
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
-      if ((frames % 50) === 0) spawnPipe(); // tuned for 30 FPS
+      // >>> same spacing as the original (every 100 frames at speed 2px/frame)
+      if (frames % 100 === 0) spawnPipe();
     }
 
     function drawBG(){ ctx.drawImage(SPR.bg, 0, 0); }
@@ -178,27 +169,18 @@
       scoreEl.style.display  = "none";
       renderOnce(false);
     }
-
     function reset(){
       score = 0; scoreEl.textContent = score;
       pipes.length = 0; frames = 0;
-      bird.y = (CANVAS_H * 0.35)|0;
+      bird.y = Math.floor(CANVAS_H * 0.35);
       bird.speed = 0;
     }
-
-    // --- steady 30 FPS loop ---
-    const TARGET_DT = 1000 / 30;
-    let last = 0;
-    function loop(now){
+    function loop(){
       if (!running) return;
-      if (now - last >= TARGET_DT) {
-        last = now;
-        frames++;
-        renderOnce(true);
-      }
+      frames++;
+      renderOnce(true);
       requestAnimationFrame(loop);
     }
-
     function renderOnce(run=false){
       ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
       drawBG();
@@ -208,20 +190,12 @@
       bird.draw();
       drawGround();
     }
-
-    async function startGame(){
-      // init WebAudio once on user gesture
-      if (!audioCtx) {
-        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(_) {}
-        if (audioCtx) await loadStainesBuffer();
-      }
-      SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
-
+    function startGame(){
+      SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
       reset(); running = true;
       scoreEl.style.display = "block";
       startBtn.style.display = "none";
-      last = performance.now();
-      requestAnimationFrame(loop);
+      loop();
     }
 
     // inputs
@@ -229,13 +203,15 @@
     window.addEventListener("pointerdown", ()=>{ if (running) bird.flap(); });
     startBtn.addEventListener("click", startGame);
 
-    // boot + pre-scale sprites once
+    // boot
     (async function boot(){
       const [bg, ground, pipeN, pipeS, birdImg] = await Promise.all([
         loadImg(FILE_BG), loadImg(FILE_GROUND), loadImg(FILE_PIPE_N), loadImg(FILE_PIPE_S), loadImg(FILE_BIRD)
       ]);
 
-      SPR.bg     = scalify(bg, CANVAS_W, CANVAS_H - GROUND_H);
+      // pre-scale once to draw sizes
+      const bgH = CANVAS_H - GROUND_H;
+      SPR.bg     = scalify(bg, CANVAS_W, bgH);
       SPR.ground = scalify(ground, CANVAS_W, GROUND_H);
       SPR.pipeN  = scalify(pipeN, PIPE_W, PIPE_H);
       SPR.pipeS  = scalify(pipeS, PIPE_W, PIPE_H);
