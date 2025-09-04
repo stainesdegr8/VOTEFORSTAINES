@@ -233,9 +233,94 @@
   // // Optional quick test:
   // setTimeout(()=>reportScore(10), 5000);
 </script>
+<!-- Telegram Games + autoscore wiring -->
+<script src="https://telegram.org/js/games.js"></script>
+<script>
+  // Your bot's public URL on Railway:
+  const BOT_API_URL = "https://flappystainesbot-production.up.railway.app";
+
+  // IDs appended by the bot when opening the game
+  const Q = new URLSearchParams(location.search);
+  const PLAYER_ID = Q.get("u");
+  const CHAT_ID   = Q.get("c");
+  const MSG_ID    = Q.get("m");
+  const INLINE_ID = Q.get("i");
+
+  async function sendScoreToBot(score) {
+    try {
+      await fetch(`${BOT_API_URL}/setscore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          score: Number(score),
+          u: PLAYER_ID,
+          c: CHAT_ID,
+          m: MSG_ID,
+          i: INLINE_ID
+        })
+      });
+    } catch (e) {
+      console.log("sendScoreToBot failed", e);
+    }
+  }
+
+  // Call this on Game Over (no popup)
+  function reportScore(score) {
+    sendScoreToBot(score);
+  }
+
+  // --- Suppress the template's share prompt & auto-submit score instead ---
+
+  // (1) Hide any visible "share" button (common class/id variations)
+  (function hideShareUI(){
+    const css = `
+      .share, #share, .btn-share, [onclick*="share("] { display: none !important; visibility: hidden !important; }
+    `;
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+  })();
+
+  // (2) Override any global share() the game calls on death.
+  // Use polling so our override survives if the game reassigns it later.
+  (function hookShare(){
+    const replace = () => {
+      if (typeof window.share === 'function') {
+        window.share = function(score){ reportScore(score); /* no popup */ };
+        return true;
+      }
+      return false;
+    };
+    // Try now, then keep trying for a few seconds in case the game defines it late
+    if (!replace()) {
+      let tries = 0;
+      const t = setInterval(() => { if (replace() || ++tries > 40) clearInterval(t); }, 250);
+    }
+  })();
+
+  // (3) As a last resort, neuter native share calls so no contact share prompts appear
+  if (navigator.share) {
+    const origShare = navigator.share.bind(navigator);
+    navigator.share = function(){ /* block contact sharing */ return Promise.resolve(); };
+  }
+  (function blockWindowOpen(){
+    const origOpen = window.open;
+    window.open = function(url, ...rest){
+      // Block typical social share URLs; allow others
+      if (typeof url === 'string' && /whatsapp|facebook|twitter|telegram\.me|t\.me\/share|mailto:/i.test(url)) {
+        return null;
+      }
+      return origOpen ? origOpen(url, ...rest) : null;
+    };
+  })();
+
+  // DEBUG helper (remove after confirming): submit a test score after 6s
+  // setTimeout(() => reportScore(10), 6000);
+</script>
 
 </body>
 </html>
+
 
 
 
