@@ -28,7 +28,7 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Performance-tuned Flappy (same behaviour as yours) =====
+    // ===== Performance-tuned Flappy =====
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d", { alpha:false, desynchronized:true });
     ctx.imageSmoothingEnabled = false;
@@ -36,7 +36,7 @@
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // Files (match your repo)
+    // Files
     const FILE_BG     = "bg.png";
     const FILE_GROUND = "ground.png";
     const FILE_PIPE_N = "tube1.png";
@@ -48,7 +48,7 @@
     const DIE_FILE     = "sfx_die.mp3";
     const POINT_FILE   = "sfx_point.mp3";
 
-    // Layout
+    // Layout (integers to avoid sub-pixel work)
     const CANVAS_W = 420, CANVAS_H = 680;
     const GROUND_H = (CANVAS_H * 0.18) | 0;
     const PIPE_W   = (CANVAS_W * 0.16) | 0;
@@ -56,46 +56,59 @@
     const GAP      = (CANVAS_H * 0.22) | 0;
     const BIRD_SZ  = (CANVAS_W * 0.11) | 0;
 
-    // ---- Helpers ----
+    // Helpers
     const loadImg = src => new Promise(r => { const i=new Image(); i.onload=()=>r(i); i.onerror=()=>r(null); i.src=src; });
 
-    // Pre-scale an image into an offscreen canvas so drawImage is cheap
     function scalify(img, w, h){
       if (!img) return null;
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
-      const x = c.getContext('2d', { alpha:true, desynchronized:true });
+      const x = c.getContext('2d', { desynchronized:true });
       x.imageSmoothingEnabled = false;
       x.drawImage(img, 0, 0, w, h);
       return c;
     }
 
-    // Audio pool + small cooldown to avoid lag from overlap storms
-    function makePool(src, n=4){
+    // HTMLAudio pools for light SFX
+    function makePool(src, n=3){
       const base = new Audio(src); base.preload="auto"; base.load();
       const pool = Array.from({length:n}, () => base.cloneNode(true));
-      let idx = 0, last = 0;
-      const SFX_COOLDOWN_MS = 120; // set to 0 if you truly want zero limit
+      let idx = 0;
       return {
         prime(){ [base, ...pool].forEach(a => { a.play().then(()=>{a.pause();a.currentTime=0;}).catch(()=>{}); }); },
-        play(){
-          const now = performance.now();
-          if (now - last < SFX_COOLDOWN_MS) return; // throttle a bit
-          last = now;
-          const a = pool[idx++ % pool.length];
-          try { a.currentTime = 0; a.play().catch(()=>{}); } catch(_) {}
-        }
+        play(){ const a = pool[idx++ % pool.length]; try{ a.currentTime=0; a.play().catch(()=>{});}catch(_){}; }
       };
     }
 
     const SFX = {
-      staines: makePool(STAINES_FILE, 6),
-      hit:     makePool(HIT_FILE, 2),
-      die:     makePool(DIE_FILE, 2),
-      point:   makePool(POINT_FILE, 2)
+      hit:   makePool(HIT_FILE, 2),
+      die:   makePool(DIE_FILE, 2),
+      point: makePool(POINT_FILE, 2)
     };
 
-    // Sprites (offscreen, pre-scaled)
+    // WebAudio for the flap (MUCH lighter than many HTMLAudio plays)
+    let audioCtx = null, stainesBuf = null;
+    const FLAP_SNIP = 0.8; // seconds to play from start (trim if your file is long)
+
+    async function loadStainesBuffer(){
+      try{
+        const res = await fetch(STAINES_FILE);
+        const arr = await res.arrayBuffer();
+        stainesBuf = await audioCtx.decodeAudioData(arr);
+      }catch(e){ stainesBuf = null; }
+    }
+    function playStaines(){
+      if (!audioCtx || !stainesBuf) return;
+      try{
+        const src = audioCtx.createBufferSource();
+        src.buffer = stainesBuf;
+        src.connect(audioCtx.destination);
+        const dur = Math.min(FLAP_SNIP, stainesBuf.duration);
+        src.start(0, 0, dur); // play only first X seconds to reduce load
+      }catch(_){}
+    }
+
+    // Sprites (pre-scaled offscreens)
     const SPR = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
 
     // State
@@ -106,11 +119,8 @@
       y: (CANVAS_H * 0.35) | 0,
       w: BIRD_SZ, h: BIRD_SZ,
       gravity: 0.25, jump: 4.6, speed: 0,
-      draw() {
-        if (SPR.bird) ctx.drawImage(SPR.bird, (this.x - this.w/2) | 0, (this.y - this.h/2) | 0);
-        else { ctx.fillStyle="#ffcc00"; ctx.fillRect((this.x - this.w/2)|0, (this.y - this.h/2)|0, this.w, this.h); }
-      },
-      flap(){ this.speed = -this.jump; SFX.staines.play(); },
+      draw(){ if (SPR.bird) ctx.drawImage(SPR.bird, (this.x - this.w/2)|0, (this.y - this.h/2)|0); else { ctx.fillStyle="#ff0"; ctx.fillRect((this.x - this.w/2)|0,(this.y - this.h/2)|0,this.w,this.h);} },
+      flap(){ this.speed = -this.jump; playStaines(); },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
@@ -127,21 +137,21 @@
     }
     function drawPipes(){
       for (const p of pipes) {
-        ctx.drawImage(SPR.pipeN, p.x | 0, p.y | 0);
-        ctx.drawImage(SPR.pipeS, p.x | 0, (p.y + PIPE_H + GAP) | 0);
+        ctx.drawImage(SPR.pipeN, p.x|0, p.y|0);
+        ctx.drawImage(SPR.pipeS, p.x|0, (p.y + PIPE_H + GAP)|0);
       }
     }
     function updatePipes(){
       for (const p of pipes) {
-        p.x -= 2; // integer speed
+        p.x -= 2;
 
         // AABB
-        const bx1 = (bird.x - bird.w/2) | 0, bx2 = (bird.x + bird.w/2) | 0;
-        const by1 = (bird.y - bird.h/2) | 0, by2 = (bird.y + bird.h/2) | 0;
-        const px1 = p.x | 0, px2 = (p.x + PIPE_W) | 0;
+        const bx1 = (bird.x - bird.w/2)|0, bx2 = (bird.x + bird.w/2)|0;
+        const by1 = (bird.y - bird.h/2)|0, by2 = (bird.y + bird.h/2)|0;
+        const px1 = p.x|0, px2 = (p.x + PIPE_W)|0;
 
-        const topBottomY = (p.y + PIPE_H) | 0;
-        const gapEnd     = (topBottomY + GAP) | 0;
+        const topBottomY = (p.y + PIPE_H)|0;
+        const gapEnd     = (topBottomY + GAP)|0;
 
         const overlapX = (bx2 > px1) && (bx1 < px2);
         const hitTop   = overlapX && (by1 < topBottomY);
@@ -156,35 +166,40 @@
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
-      if ((frames % 100) === 0) spawnPipe();
+      if ((frames % 50) === 0) spawnPipe(); // tuned for 30 FPS
     }
 
     function drawBG(){ ctx.drawImage(SPR.bg, 0, 0); }
-    function drawGround(){ ctx.drawImage(SPR.ground, 0, (CANVAS_H - GROUND_H) | 0); }
+    function drawGround(){ ctx.drawImage(SPR.ground, 0, (CANVAS_H - GROUND_H)|0); }
 
     function gameOver(){
       running = false;
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
-      renderOnce(); // final frame
+      renderOnce(false);
     }
 
     function reset(){
       score = 0; scoreEl.textContent = score;
       pipes.length = 0; frames = 0;
-      bird.y = (CANVAS_H * 0.35) | 0;
+      bird.y = (CANVAS_H * 0.35)|0;
       bird.speed = 0;
     }
 
-    function loop(){
+    // --- steady 30 FPS loop ---
+    const TARGET_DT = 1000 / 30;
+    let last = 0;
+    function loop(now){
       if (!running) return;
-      frames++;
-      renderOnce(true);
+      if (now - last >= TARGET_DT) {
+        last = now;
+        frames++;
+        renderOnce(true);
+      }
       requestAnimationFrame(loop);
     }
 
     function renderOnce(run=false){
-      // Clear once, then only draw scaled sprites (no per-frame scaling/transforms)
       ctx.clearRect(0,0,CANVAS_W,CANVAS_H);
       drawBG();
       if (run) updatePipes();
@@ -194,12 +209,19 @@
       drawGround();
     }
 
-    function startGame(){
-      SFX.staines.prime(); SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
+    async function startGame(){
+      // init WebAudio once on user gesture
+      if (!audioCtx) {
+        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(_) {}
+        if (audioCtx) await loadStainesBuffer();
+      }
+      SFX.hit.prime(); SFX.die.prime(); SFX.point.prime();
+
       reset(); running = true;
       scoreEl.style.display = "block";
       startBtn.style.display = "none";
-      loop();
+      last = performance.now();
+      requestAnimationFrame(loop);
     }
 
     // inputs
@@ -241,3 +263,4 @@
   </script>
 </body>
 </html>
+
