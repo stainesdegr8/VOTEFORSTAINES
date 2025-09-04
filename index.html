@@ -28,7 +28,7 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on EVERY FLAP. =====
+    // ===== Fixed-layout Flappy. "VOTE FOR STAINES" plays on SCORE ONLY. =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
@@ -41,7 +41,7 @@
     const FILE_PIPE_S  = "tube2.png";
     const FILE_BIRD    = "bird.png";
 
-    // ---- Audio (your repo has vote-for-staines.mp3) ----
+    // ---- Audio ----
     const STAINES_FILE = "vote-for-staines.mp3";
     const HIT_FILE     = "sfx_hit.mp3";
     const DIE_FILE     = "sfx_die.mp3";
@@ -64,7 +64,7 @@
       };
     }
     const SFX = {
-      staines: makePool(STAINES_FILE, 6), // <-- plays on FLAP
+      staines: makePool(STAINES_FILE, 6), // <-- plays on SCORE now
       hit:     makePool(HIT_FILE, 2),
       die:     makePool(DIE_FILE, 2),
       point:   makePool(POINT_FILE, 2)
@@ -99,13 +99,14 @@
         if (IM.bird) {
           ctx.drawImage(IM.bird, -this.w/2, -this.h/2, this.w, this.h);
         } else {
-          // loud fallback so you SEE the bird even if image missing
+          // fallback visible bird
           ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill();
           ctx.strokeStyle="#000"; ctx.lineWidth=3; ctx.stroke();
         }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; SFX.staines.play(); }, // <-- play on EVERY tap
+      // CHANGE #1: no sound on flap anymore
+      flap(){ this.speed = -this.jump; },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
@@ -148,7 +149,10 @@
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
           score++; scoreEl.textContent = score;
-          SFX.point.play();
+          // CHANGE #2: play "VOTE FOR STAINES" on SCORE (not on flap)
+          SFX.staines.play();
+          // (Optional) remove or keep point ding; currently removed.
+          // SFX.point.play();
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
@@ -233,3 +237,4 @@
   </script>
 </body>
 </html>
+
