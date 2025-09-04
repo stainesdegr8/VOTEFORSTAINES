@@ -13,17 +13,31 @@
       padding:6px 10px; border-radius:10px; display:none; box-shadow:0 2px 6px rgba(0,0,0,.15);
       user-select:none;
     }
+    /* ADDED: final score pill */
+    #finalScore{
+      position:absolute; left:50%;
+      transform:translateX(-50%);
+      background:rgba(0,0,0,.8); color:#fff;
+      padding:12px 16px; border-radius:14px;
+      font-size:20px; font-weight:800; letter-spacing:.3px;
+      display:none; text-align:center; white-space:nowrap;
+      box-shadow:0 10px 28px rgba(0,0,0,.25);
+      user-select:none; z-index:2;
+    }
     #gameCanvas { display:block; margin:0 auto; background:#70c5ce; }
     #startBtn {
       position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
       background:#111; color:#fff; border:none; cursor:pointer; font-weight:700; font-size:18px;
-      padding:12px 22px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25); display:none;
+      padding:12px 22px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25); display:none; z-index:1;
     }
     @media (max-width:480px){ #gameCanvas { width:100vw; height:auto; } }
   </style>
 </head>
 <body>
   <div id="score">0</div>
+  <!-- ADDED: final score pill -->
+  <div id="finalScore">Score: <span id="finalNum">0</span></div>
+
   <canvas id="gameCanvas" width="420" height="680"></canvas>
   <button id="startBtn">Start Game</button>
 
@@ -33,6 +47,9 @@
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
+    // ADDED: refs for final score pill
+    const finalBox = document.getElementById("finalScore");
+    const finalNum = document.getElementById("finalNum");
 
     // ---- Filenames (match your repo) ----
     const FILE_BG      = "bg.png";
@@ -105,7 +122,7 @@
         }
         ctx.restore();
       },
-      // CHANGE #1: no sound on flap anymore
+      // no sound on flap
       flap(){ this.speed = -this.jump; },
       update(){
         this.speed += this.gravity; this.y += this.speed;
@@ -137,7 +154,6 @@
         const px1 = p.x, px2 = p.x + PIPE_W;
 
         const topBottomY = p.y + PIPE_H;
-        const gapStart   = topBottomY;
         const gapEnd     = topBottomY + GAP;
 
         const overlapX = (bx2 > px1) && (bx1 < px2);
@@ -149,10 +165,8 @@
         if (!p.passed && px2 < bird.x) {
           p.passed = true;
           score++; scoreEl.textContent = score;
-          // CHANGE #2: play "VOTE FOR STAINES" on SCORE (not on flap)
-          SFX.staines.play();
-          // (Optional) remove or keep point ding; currently removed.
-          // SFX.point.play();
+          SFX.staines.play(); // voice on SCORE
+          // SFX.point.play(); // (optional) keep if you also want the ding
         }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
@@ -162,17 +176,30 @@
     function drawBG(){ if (IM.bg) ctx.drawImage(IM.bg, 0, 0, CANVAS_W, CANVAS_H - GROUND_H); }
     function drawGround(){ if (IM.ground) ctx.drawImage(IM.ground, 0, CANVAS_H - GROUND_H, CANVAS_W, GROUND_H); }
 
+    // ADDED: place final score pill just above the Start button
+    function showFinalScore(){
+      finalNum.textContent = score;
+      finalBox.style.display = "block";
+      requestAnimationFrame(() => {
+        const gap = 12;
+        const above = Math.max(12, startBtn.offsetTop - finalBox.offsetHeight - gap);
+        finalBox.style.top = `${above}px`;
+      });
+    }
+
     function gameOver(){
       running = false;
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
-      renderOnce(); // show final frame
+      showFinalScore();           // <-- ADDED
+      renderOnce();               // freeze final frame
     }
     function reset(){
       score = 0; scoreEl.textContent = score;
       pipes.length = 0; frames = 0;
       bird.y = Math.floor(CANVAS_H * 0.35);
       bird.speed = 0;
+      finalBox.style.display = "none"; // <-- ADDED (hide pill on restart)
     }
     function loop(){
       if (!running) return;
@@ -216,7 +243,7 @@
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
       startBtn.style.display = "block";
 
-      // draw a preview frame so you SEE the bird before pressing Start
+      // preview frame
       renderOnce();
     })();
   </script>
@@ -237,4 +264,3 @@
   </script>
 </body>
 </html>
-
