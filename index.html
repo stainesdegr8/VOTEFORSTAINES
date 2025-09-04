@@ -28,55 +28,38 @@
   <button id="startBtn">Start Game</button>
 
   <script>
-    // ===== Fixed-layout Flappy (stable sizes, no reliance on image dimensions) =====
+    // ===== Fixed-layout Flappy (explicit filenames; shows top pipes + your face) =====
     const canvas   = document.getElementById("gameCanvas");
     const ctx      = canvas.getContext("2d");
     const scoreEl  = document.getElementById("score");
     const startBtn = document.getElementById("startBtn");
 
-    // ---------- CANVAS LAYOUT (edit these 5 lines if you want different proportions) ----------
-    const CANVAS_W   = 420, CANVAS_H = 680;                 // internal logical size
-    const GROUND_H   = Math.round(CANVAS_H * 0.18);         // ground thickness (px)
-    const PIPE_W     = Math.round(CANVAS_W * 0.16);         // pipe width (px)
-    const PIPE_H     = Math.round(CANVAS_H * 0.62);         // pipe on-screen height (px) per segment
-    const GAP        = Math.round(CANVAS_H * 0.22);         // vertical gap between pipes (px)
-    const BIRD_SIZE  = Math.round(CANVAS_W * 0.11);         // bird square size (px)
+    // ---- EXACT FILENAMES (rename your repo files to match, or change these) ----
+    const FILE_BG      = "bg.png";
+    const FILE_GROUND  = "ground.png";
+    const FILE_PIPE_N  = "tube1.png";      // top pipe image
+    const FILE_PIPE_S  = "tube2.png";      // bottom pipe image
+    const FILE_BIRD    = "smallbird.png";  // your face sprite (PNG)
 
-    // ---------- ASSET FILENAMES (kept flexible; use any one that exists) ----------
-    const IMG = {
-      bg:     ["bg.png"],                     // drawn stretched
-      ground: ["ground.png"],                 // drawn stretched
-      pipeN:  ["tube1.png","PipeNorth.png"],  // drawn to PIPE_W x PIPE_H
-      pipeS:  ["tube2.png","PipeSouth.png"],  // drawn to PIPE_W x PIPE_H
-      bird:   ["smallbird.png","bird.png","player.png"] // drawn to BIRD_SIZE square
-    };
-    const SFX = {
-      flap:   ["sfx_swooshing.mp3", "vote for staines.mp3", "vote_for_staines.mp3"],
-      hit:    ["sfx_hit.mp3"], die: ["sfx_die.mp3"], point: ["sfx_point.mp3"]
-    };
+    // ---- Canvas proportions (tweak if you want) ----
+    const CANVAS_W = 420, CANVAS_H = 680;           // logical size
+    const GROUND_H = Math.round(CANVAS_H * 0.18);   // ground thickness
+    const PIPE_W   = Math.round(CANVAS_W * 0.16);   // pipe width
+    const PIPE_H   = Math.round(CANVAS_H * 0.62);   // each pipe segment height
+    const GAP      = Math.round(CANVAS_H * 0.22);   // gap between pipes
+    const BIRD_SZ  = Math.round(CANVAS_W * 0.11);   // bird square size
 
-    // ---------- helpers ----------
-    const loadImageFirst = (list) => new Promise(async (resolve) => {
-      for (const src of list) {
-        const im = new Image();
-        im.onload = () => resolve(im);
-        im.onerror = () => resolve(null);   // move on; we stretch/draw fallbacks anyway
-        im.src = src;
-        await new Promise(r => setTimeout(r, 0));
-        if (im.complete && im.naturalWidth) return; // resolved via onload
-      }
-      resolve(null);
-    });
-    const play = (srcList) => { try { const a = new Audio(srcList[0]); a.currentTime = 0; a.play().catch(()=>{}); } catch(_){} };
+    // ---- Load helpers ----
+    const loadImg = (src) => new Promise((res)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=src; });
 
-    // ---------- game state ----------
+    // ---- State ----
     let IM = { bg:null, ground:null, pipeN:null, pipeS:null, bird:null };
-    let frames = 0, score = 0, running = false;
+    let frames=0, score=0, running=false;
 
     const bird = {
       x: Math.floor(CANVAS_W * 0.24),
       y: Math.floor(CANVAS_H * 0.35),
-      w: BIRD_SIZE, h: BIRD_SIZE,
+      w: BIRD_SZ, h: BIRD_SZ,
       gravity: 0.25, jump: 4.6, speed: 0, rotation: 0,
       draw() {
         ctx.save();
@@ -86,16 +69,17 @@
         else { ctx.fillStyle="#ffcc00"; ctx.beginPath(); ctx.arc(0,0,this.w*0.5,0,Math.PI*2); ctx.fill(); }
         ctx.restore();
       },
-      flap(){ this.speed = -this.jump; play(SFX.flap); },
+      flap(){ this.speed = -this.jump; try { const a=new Audio("sfx_swooshing.mp3"); a.currentTime=0; a.play(); } catch(_){} },
       update(){
         this.speed += this.gravity; this.y += this.speed;
         const floorY = CANVAS_H - GROUND_H;
-        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; play(SFX.die); gameOver(); }
+        if (this.y + this.h/2 >= floorY) { this.y = floorY - this.h/2; try{ new Audio("sfx_die.mp3").play(); }catch(_){}; gameOver(); }
       }
     };
 
-    const pipes = [];  // each: {x,y,passed}
+    const pipes = []; // {x,y,passed}
     function spawnPipe(){
+      // Top pipe's top-left Y (negative so it sticks down)
       const minTop = -Math.round(PIPE_H * 0.85);
       const maxTop = -Math.round(PIPE_H * 0.25);
       const topY   = minTop + Math.random() * (maxTop - minTop);
@@ -103,30 +87,34 @@
     }
     function drawPipes(){
       for (const p of pipes) {
-        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);  // top
-        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H); // bottom
+        // TOP pipe (this is what was missing if FILE_PIPE_N didn't load)
+        if (IM.pipeN) ctx.drawImage(IM.pipeN, p.x, p.y, PIPE_W, PIPE_H);
+        // BOTTOM pipe
+        if (IM.pipeS) ctx.drawImage(IM.pipeS, p.x, p.y + PIPE_H + GAP, PIPE_W, PIPE_H);
       }
     }
     function updatePipes(){
       for (const p of pipes) {
         p.x -= 2;
 
-        // AABB vs top/bottom rectangles
+        // Collision (AABB vs top/bottom rectangles)
         const bx1 = bird.x - bird.w/2, bx2 = bird.x + bird.w/2;
         const by1 = bird.y - bird.h/2, by2 = bird.y + bird.h/2;
         const px1 = p.x, px2 = p.x + PIPE_W;
 
-        const topBottomY = p.y + PIPE_H;
-        const gapStart   = topBottomY;
-        const gapEnd     = topBottomY + GAP;
+        const topBottomY = p.y + PIPE_H;       // bottom edge of top pipe
+        const gapStart   = topBottomY;         // start of gap
+        const gapEnd     = topBottomY + GAP;   // end of gap
 
         const overlapX = (bx2 > px1) && (bx1 < px2);
         const hitTop   = overlapX && (by1 < topBottomY);
         const hitBot   = overlapX && (by2 > gapEnd);
 
-        if (hitTop || hitBot) { play(SFX.hit); gameOver(); }
+        if (hitTop || hitBot) { try{ new Audio("sfx_hit.mp3").play(); }catch(_){}; gameOver(); }
 
-        if (!p.passed && px2 < bird.x) { p.passed = true; score++; scoreEl.textContent = score; play(SFX.point); }
+        if (!p.passed && px2 < bird.x) {
+          p.passed = true; score++; scoreEl.textContent = score; try{ new Audio("sfx_point.mp3").play(); }catch(_){}
+        }
       }
       if (pipes.length && pipes[0].x < -PIPE_W) pipes.shift();
       if (frames % 100 === 0) spawnPipe();
@@ -137,6 +125,7 @@
 
     function gameOver(){
       running = false;
+      try{ new Audio("sfx_swooshing.mp3").play(); }catch(_){}
       startBtn.style.display = "block";
       scoreEl.style.display  = "none";
     }
@@ -169,23 +158,28 @@
     window.addEventListener("pointerdown", ()=>{ if (running) bird.flap(); });
     startBtn.addEventListener("click", startGame);
 
-    // boot: load images (we don't use their sizes), then reveal start
+    // boot
     (async function boot(){
       const [bg, ground, pipeN, pipeS, birdImg] = await Promise.all([
-        loadImageFirst(IMG.bg), loadImageFirst(IMG.ground),
-        loadImageFirst(IMG.pipeN), loadImageFirst(IMG.pipeS),
-        loadImageFirst(IMG.bird)
+        loadImg(FILE_BG), loadImg(FILE_GROUND), loadImg(FILE_PIPE_N), loadImg(FILE_PIPE_S), loadImg(FILE_BIRD)
       ]);
       IM = { bg, ground, pipeN, pipeS, bird: birdImg };
 
-      // force canvas logical size (in case HTML editors changed it)
+      // force canvas size (in case attributes were changed)
       canvas.width = CANVAS_W; canvas.height = CANVAS_H;
+
+      // QUICK DIAGNOSTIC: if any image missing, log it once to console
+      if (!bg)     console.log("Missing image:", FILE_BG);
+      if (!ground) console.log("Missing image:", FILE_GROUND);
+      if (!pipeN)  console.log("Missing image:", FILE_PIPE_N, "(TOP pipes will not show)");
+      if (!pipeS)  console.log("Missing image:", FILE_PIPE_S);
+      if (!birdImg)console.log("Missing image:", FILE_BIRD, "(you'll see a yellow circle instead)");
 
       startBtn.style.display = "block";
     })();
   </script>
 
-  <!-- ===== Kill "share to contacts" (no popups) ===== -->
+  <!-- ===== Disable any contact-share UI from templates ===== -->
   <script>
     (function(){
       const css = `.share,#share,.btn-share,[onclick*="share("]{display:none!important;visibility:hidden!important}`;
